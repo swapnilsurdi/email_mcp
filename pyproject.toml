@@ -1,6 +1,6 @@
 [project]
 name = "email-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local MCP server for multi-account IMAP/SMTP email (tested on iCloud)"
 readme = "README.md"
 license = "MIT"
