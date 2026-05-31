@@ -1,0 +1,25 @@
+# email-mcp account registry — EXAMPLE (no secrets; safe to commit/publish).
+#
+# Copy to ~/.config/email-mcp/accounts.yml (or point EMAIL_MCP_ACCOUNTS at it) and
+# fill in your own addresses. Passwords are NOT stored here — store each account's
+# app-specific password in the macOS Keychain:
+#     python -m email_mcp.setup_cli <name>
+#
+# Fields: name (handle + Keychain key), email (login address), imap_host/imap_port,
+# smtp_host/smtp_port, default (optional; exactly one account may be true).
+
+accounts:
+  - name: icloud-personal
+    email: you@icloud.com
+    imap_host: imap.mail.me.com
+    imap_port: 993
+    smtp_host: smtp.mail.me.com
+    smtp_port: 587
+    default: true
+
+  - name: gmail-personal
+    email: you@gmail.com
+    imap_host: imap.gmail.com
+    imap_port: 993
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
