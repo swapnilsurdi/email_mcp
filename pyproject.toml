@@ -1,11 +1,22 @@
 [project]
 name = "email-mcp"
 version = "0.1.0"
-description = "Local MCP server for multi-account IMAP/SMTP email"
+description = "Local MCP server for multi-account IMAP/SMTP email (tested on iCloud)"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
-# TODO before PyPI publish: add license + LICENSE file, authors, [project.urls],
-# classifiers, and verify the PyPI name is available (it is generic / may collide).
+authors = [{ name = "Swapnil Surdi" }]
+keywords = ["mcp", "email", "imap", "smtp", "icloud", "claude", "agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Email",
+]
 dependencies = [
     "mcp>=1.2.0",
     "keyring>=25.0.0",
@@ -13,6 +24,11 @@ dependencies = [
     "PyYAML>=6.0",
     "certifi>=2024.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/swapnilsurdi/email_mcp"
+Repository = "https://github.com/swapnilsurdi/email_mcp"
+Issues = "https://github.com/swapnilsurdi/email_mcp/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
@@ -34,6 +50,7 @@ include = [
     "src/email_mcp",
     "config/accounts.example.yml",
     "README.md",
+    "LICENSE",
     "pyproject.toml",
 ]
 
