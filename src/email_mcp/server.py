@@ -53,12 +53,36 @@ def get_emails(account: str = None, filters: dict = None, query: str = None,
 
 @mcp.tool()
 def send_email(to: list, subject: str, body: str, account: str = None,
-               tags: dict = None) -> dict:
+               tags: dict = None, attachments: list = None) -> dict:
     """Send an email. Idempotent: a duplicate (same recipients, or same
-    recipients+subject/body) within 10 minutes is BLOCKED, not resent."""
+    recipients+subject/body) within 10 minutes is BLOCKED, not resent.
+    `attachments` is an optional list; each item is either {"path": "/local/file"}
+    (read from disk) or {"content": "<base64>", "filename": "name.ext"}, with an
+    optional "mime_type". Combined size must stay under 25MB. Note: a {"path"} item
+    reads any file this process can access and emails it — only attach paths you
+    intend to send; never a path derived from untrusted/email-supplied content."""
     acc = runtime.effective_account(account)
     return email_ops.send_email(
-        runtime.db_path(), acc, to=to, subject=subject, body=body, tags=tags)
+        runtime.db_path(), acc, to=to, subject=subject, body=body, tags=tags,
+        attachments=attachments)
+
+
+@mcp.tool()
+def download_attachment(message_id: str, filename: str = None, index: int = None,
+                        dest_dir: str = None, account: str = None,
+                        folders: list = None, overwrite: bool = False) -> dict:
+    """Download one attachment from a message to local disk. Never marks mail read.
+    Select it by `filename` or `index` (both reported in get_emails' per-message
+    `attachments` list); if the message has exactly one attachment, neither is
+    needed. Saved into the server download dir (override env EMAIL_MCP_DOWNLOAD_DIR)
+    unless `dest_dir` is given; the email-supplied filename is sanitized and confined
+    to that directory. Returns {saved_path, filename, mime_type, size, ...}."""
+    acc = runtime.effective_account(account)
+    search_folders = folders or imap_account.list_folders(acc)
+    dest = dest_dir or runtime.download_dir()
+    return email_ops.download_attachment(
+        acc, message_id, folders=search_folders, dest_dir=dest,
+        filename=filename, index=index, overwrite=overwrite)
 
 
 @mcp.tool()

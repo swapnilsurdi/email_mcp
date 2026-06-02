@@ -4,6 +4,7 @@ from pathlib import Path
 from email_mcp import accounts, store
 
 _DEFAULT_DB = Path.home() / ".local/state/email-mcp/state.db"
+_DEFAULT_DOWNLOAD_DIR = Path.home() / ".local/state/email-mcp/attachments"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Default to a user config dir so the installed package works without a source
 # checkout. Override with EMAIL_MCP_ACCOUNTS. (A repo-local config/accounts.yml is
@@ -38,6 +39,15 @@ def db_path():
 
 def accounts_file():
     return os.environ.get("EMAIL_MCP_ACCOUNTS", str(_DEFAULT_ACCOUNTS))
+
+
+def download_dir():
+    """Base directory downloaded attachments are written to. Override with
+    EMAIL_MCP_DOWNLOAD_DIR. Created on demand. This is the sandbox root — a download
+    is always confined to a single file directly inside it (see email_ops)."""
+    p = os.environ.get("EMAIL_MCP_DOWNLOAD_DIR", str(_DEFAULT_DOWNLOAD_DIR))
+    Path(p).mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def effective_account(name=None):

@@ -77,7 +77,7 @@ from email_mcp import ledger
 def test_send_blocks_duplicate(db_path):
     sent = []
 
-    def fake_send(acc, to, subject, body):
+    def fake_send(acc, to, subject, body, attachments=None):
         sent.append((to, subject, body))
         return "<mid-1@x>"
 
@@ -97,7 +97,7 @@ def test_send_blocks_duplicate(db_path):
 
 
 def test_send_failure_records_failed_and_blocks(db_path):
-    def boom(acc, to, subject, body):
+    def boom(acc, to, subject, body, attachments=None):
         raise RuntimeError("smtp down")
 
     r1 = email_ops.send_email(
@@ -107,7 +107,7 @@ def test_send_failure_records_failed_and_blocks(db_path):
 
     r2 = email_ops.send_email(
         db_path, ACC, to=["z@y.com"], subject="S", body="B",
-        tags=None, send_fn=lambda *a: "<x>", now=2000.0 + 30)
+        tags=None, send_fn=lambda *a, **k: "<x>", now=2000.0 + 30)
     assert r2["status"] == "BLOCKED"
     assert r2["prior"]["status"] == "failed"
 

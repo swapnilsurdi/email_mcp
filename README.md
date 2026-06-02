@@ -46,7 +46,22 @@ claude mcp add email --scope user -- email-mcp
 
 ## Tools
 list_accounts, set_default_account, list_folders, get_emails (recency by default;
-search via query/filters), send_email (idempotent), mark_email, move_email.
+search via query/filters; per-message `attachments` metadata), download_attachment,
+send_email (idempotent; optional `attachments`), mark_email, move_email.
+
+### Attachments
+- **Reading:** `get_emails` reports an `attachments` list per message
+  (`{index, filename, mime_type, size, inline}`) — metadata only, never the bytes.
+  `download_attachment(message_id, filename=… | index=…)` writes one attachment to
+  disk (read-only; never marks mail read) and returns the saved path. Files land in
+  `EMAIL_MCP_DOWNLOAD_DIR` (default `~/.local/state/email-mcp/attachments`) unless you
+  pass `dest_dir`. The email-supplied filename is sanitized and confined to that
+  directory (path-traversal safe); existing files are not clobbered unless
+  `overwrite=true`.
+- **Sending:** `send_email`'s optional `attachments` is a list where each item is
+  either `{"path": "/local/file"}` (read from disk) or `{"content": "<base64>",
+  "filename": "name.ext"}`, with an optional `"mime_type"`. Combined size is capped at
+  25 MB.
 
 ## Get an app-specific password
 - iCloud: appleid.apple.com -> Sign-In & Security -> App-Specific Passwords.

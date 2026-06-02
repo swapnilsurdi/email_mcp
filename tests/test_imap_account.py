@@ -184,3 +184,73 @@ def test_folder_name_roundtrips():
     for name in ("INBOX", "Deleted Messages", "Café", "A&B", "日本"):
         line = ('(\\HasNoChildren) "/" ' + imap_account._encode_folder(name)).encode()
         assert imap_account._parse_folder_name(line) == name
+
+
+def _raw_email_with_attachment(filename="doc.pdf", data=b"%PDF fake"):
+    m = email_lib.message.EmailMessage()
+    m["Subject"] = "has attach"
+    m["From"] = "s@x.com"
+    m["To"] = "me@x.com"
+    m["Message-ID"] = "<att@x>"
+    m["Date"] = "Wed, 28 May 2026 10:00:00 +0000"
+    m.set_content("see attached")
+    m.add_attachment(data, maintype="application", subtype="pdf", filename=filename)
+    return bytes(m)
+
+
+class FakeIMAPFetchMessage(FakeIMAP):
+    def __init__(self, raw):
+        super().__init__()
+        self.raw = raw
+        self.select_readonly = []
+
+    def select(self, folder, readonly=False):
+        self.select_readonly.append(readonly)
+        return ("OK", [b"1"])
+
+    def uid(self, command, *args):
+        if command == "SEARCH":
+            return ("OK", [b"7"])
+        if command == "FETCH":
+            return ("OK", [(b"7 (BODY[])", self.raw), b")"])
+        return ("OK", [b"done"])
+
+
+def test_fetch_message_returns_parsed_message_readonly():
+    fake = FakeIMAPFetchMessage(_raw_email_with_attachment())
+    folder, msg = imap_account.fetch_message(
+        ACC, "<att@x>", folders=["INBOX"], connect_fn=lambda acc: fake)
+    assert folder == "INBOX"
+    assert msg is not None
+    assert msg.get("Subject") == "has attach"
+    assert any(p.get_filename() == "doc.pdf" for p in msg.walk())
+    assert True in fake.select_readonly and False not in fake.select_readonly
+
+
+def test_fetch_message_not_found_returns_none():
+    class NoMatch(FakeIMAPFetchMessage):
+        def uid(self, command, *args):
+            if command == "SEARCH":
+                return ("OK", [b""])   # no UID found
+            return ("OK", [b"done"])
+    fake = NoMatch(b"")
+    folder, msg = imap_account.fetch_message(
+        ACC, "<missing@x>", folders=["INBOX"], connect_fn=lambda acc: fake)
+    assert folder is None and msg is None
+
+
+def test_fetch_folder_includes_attachment_metadata():
+    class WithAtt(FakeIMAPWithMsgs):
+        def fetch(self, message_set, spec):
+            self.fetch_specs.append(spec)
+            return ("OK", [
+                (b"1 (BODY[])", _raw_email_with_attachment(filename="x.csv",
+                                                           data=b"a,b\n1,2\n")),
+                b")",
+            ])
+    fake = WithAtt()
+    msgs = imap_account.fetch_folder(
+        ACC, "INBOX", criteria=["ALL"], connect_fn=lambda acc: fake)
+    assert msgs[0]["attachments"][0]["filename"] == "x.csv"
+    assert "mime_type" in msgs[0]["attachments"][0]
+    assert msgs[0]["attachments"][0]["size"] == len(b"a,b\n1,2\n")

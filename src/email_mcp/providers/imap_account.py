@@ -163,6 +163,7 @@ def fetch_folder(acc, folder, criteria, limit=None, connect_fn=_default_connect)
                 "to_address": _decode_hdr(msg.get("To", acc["email"])),
                 "subject": _decode_hdr(msg.get("Subject", "")),
                 "body": textutil.extract_text(msg),
+                "attachments": textutil.list_attachments(msg),
                 "received_date": _parse_date(msg.get("Date", "")).isoformat(),
                 "folder": folder,
             })
@@ -182,15 +183,39 @@ def _find_uid(imap, message_id):
     return None
 
 
-def _locate(imap, message_id, folders):
+def _locate(imap, message_id, folders, readonly=False):
     for folder in folders:
-        status, _ = imap.select(_encode_folder(folder), readonly=False)
+        status, _ = imap.select(_encode_folder(folder), readonly=readonly)
         if status != "OK":
             continue
         uid = _find_uid(imap, message_id)
         if uid:
             return folder, uid
     return None, None
+
+
+def fetch_message(acc, message_id, folders, connect_fn=_default_connect):
+    """Locate a message by Message-ID and return (folder, email.message.Message).
+    Read-only and uses BODY.PEEK[] so it NEVER marks the message read. Returns
+    (None, None) if the message is not found in any of `folders`."""
+    imap = connect_fn(acc)
+    try:
+        folder, uid = _locate(imap, message_id, folders, readonly=True)
+        if not uid:
+            return None, None
+        status, data = imap.uid("FETCH", uid, "(BODY.PEEK[])")
+        if status != "OK" or not data:
+            return None, None
+        for item in data:
+            if isinstance(item, tuple) and len(item) >= 2 and item[1] is not None:
+                return folder, email.message_from_bytes(item[1])
+        return None, None
+    finally:
+        try:
+            imap.close()
+        except Exception:
+            pass
+        _safe_logout(imap)
 
 
 def mark_message(acc, message_id, read, folders, connect_fn=_default_connect):

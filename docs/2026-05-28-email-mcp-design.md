@@ -21,8 +21,13 @@ reused.
 - Calendar / Reminders (separate spec after a CalDAV spike). **Notes is impossible via an
   app-specific password** — it has no IMAP/CalDAV API and would require local AppleScript on
   a Mac; explicitly out of scope.
-- Attachment download, reply/threading headers, retry/cancel of failed sends (data model
-  anticipates the last one; behavior deferred).
+- Reply/threading headers, retry/cancel of failed sends (data model anticipates the last
+  one; behavior deferred).
+
+> **Update (post-v1):** Attachments were since added — `get_emails` reports per-message
+> attachment metadata, `download_attachment` saves one to a sandboxed download dir
+> (read-only; untrusted filenames sanitized + realpath-confined), and `send_email` accepts
+> an `attachments` list (local path or base64 content; 25 MB cap). See §4.9 / README.
 
 ## 2. Architecture
 
@@ -164,6 +169,23 @@ IMAP `MOVE` where supported; fallback `COPY` + set `\Deleted` + `EXPUNGE`. Valid
 ### 4.8 `list_folders(account?) -> [folder_name]`
 Lists folders (including nested, via `imap.list()` parsing reused from `collect_emails.py`).
 Needed for `move_email` targets and `folders` selection.
+
+### 4.9 `download_attachment(message_id, filename?, index?, dest_dir?, account?, folders?, overwrite=false) -> {saved_path, ...}` *(post-v1)*
+Locates a message by `Message-ID` (read-only; `BODY.PEEK[]`, never marks read), extracts the
+selected attachment, and writes it to disk. Selection: explicit `index` or exact `filename`
+(both surfaced by `get_emails`' per-message `attachments` metadata); a lone attachment needs
+neither. Saved into `EMAIL_MCP_DOWNLOAD_DIR` (default `~/.local/state/email-mcp/attachments`)
+unless `dest_dir` is given. **Security:** the email-supplied filename is untrusted, so it is
+reduced to a bare component (`safe_filename`) and the resolved real path is verified to sit
+directly inside the download dir — traversal (`../`, absolute, separators) cannot escape.
+Existing files are preserved (auto `name (1).ext`) unless `overwrite=true`. Misses
+(`not_found`, `no_attachments`, `attachment_not_selected` with the available list) are returned
+as structured objects, never raised.
+
+**`send_email` attachments (post-v1):** `send_email` gained an optional `attachments` list;
+each item is `{path}` (read from disk) or `{content: base64, filename}` (+ optional
+`mime_type`). Combined size is capped at 25 MB. The idempotency keys are unchanged (recipient/
+subject/body), so attachments don't affect dedup.
 
 ## 5. Send idempotency (detailed)
 
