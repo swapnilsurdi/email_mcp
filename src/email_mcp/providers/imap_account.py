@@ -130,6 +130,21 @@ def _parse_date(date_str):
         return datetime.now(timezone.utc)
 
 
+def _quote_search_args(criteria):
+    """Quote any SEARCH argument containing spaces/quotes — imaplib does NOT quote, so
+    a multi-word value (e.g. SUBJECT "test attachment") would otherwise be sent as two
+    tokens and the server rejects the command with BAD Parse Error. Search KEYS (FROM,
+    TEXT, SINCE, ...) never contain spaces, so only values are affected. (Non-ASCII
+    search values would need IMAP literals + CHARSET — not supported here.)"""
+    out = []
+    for c in criteria:
+        s = str(c)
+        if (" " in s or '"' in s) and not (s.startswith('"') and s.endswith('"')):
+            s = '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        out.append(s)
+    return out
+
+
 def _parse_uid(prefix):
     """Pull the UID out of a FETCH response prefix like b'5 (UID 12345 BODY[] {2048}'."""
     m = _UID_RE.search(prefix or b"")
@@ -182,7 +197,7 @@ def fetch_folder(acc, folder, criteria, limit=None, connect_fn=_default_connect)
         status, _ = imap.select(_encode_folder(folder), readonly=True)
         if status != "OK":
             return []
-        status, data = imap.search(None, *criteria)
+        status, data = imap.search(None, *_quote_search_args(criteria))
         if status != "OK" or not data or not data[0]:
             return []
         nums = data[0].split()

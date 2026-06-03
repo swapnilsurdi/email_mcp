@@ -232,6 +232,31 @@ def test_parse_uid():
     assert imap_account._parse_uid(b"3 (BODY[])") is None
 
 
+def test_quote_search_args_quotes_multiword_values_only():
+    out = imap_account._quote_search_args(["SUBJECT", "test attachment", "SINCE",
+                                           "02-Jun-2026", "TEXT", 'say "hi"'])
+    assert out == ["SUBJECT", '"test attachment"', "SINCE", "02-Jun-2026",
+                   "TEXT", '"say \\"hi\\""']
+    # already-quoted values pass through unchanged
+    assert imap_account._quote_search_args(['"already quoted"']) == ['"already quoted"']
+
+
+def test_fetch_folder_quotes_multiword_search(monkeypatch):
+    """A real server BAD-parses an unquoted multi-word SEARCH value (the live
+    'SUBJECT email-mcp live2' Parse Error); fetch_folder must quote it."""
+    class StrictSearch(FakeIMAPWithMsgs):
+        def search(self, charset, *criteria):
+            for c in criteria:
+                if " " in c and not (c.startswith('"') and c.endswith('"')):
+                    raise imaplib.IMAP4.error("SEARCH command error: BAD Parse Error")
+            return ("OK", [b"1"])
+    fake = StrictSearch()
+    msgs = imap_account.fetch_folder(
+        ACC, "INBOX", criteria=["SUBJECT", "test attachment"],
+        connect_fn=lambda acc: fake)
+    assert len(msgs) >= 1      # did not raise => the value was quoted
+
+
 class FakeIMAPRecent(FakeIMAP):
     def __init__(self, all_uids, raw_by_uid, uidvalidity=10):
         super().__init__()
