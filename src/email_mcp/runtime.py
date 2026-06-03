@@ -1,7 +1,8 @@
 import os
+import threading
 from pathlib import Path
 
-from email_mcp import accounts, store
+from email_mcp import accounts, mcache, store
 
 _DEFAULT_DB = Path.home() / ".local/state/email-mcp/state.db"
 _DEFAULT_DOWNLOAD_DIR = Path.home() / ".local/state/email-mcp/attachments"
@@ -55,3 +56,49 @@ def effective_account(name=None):
     if name is None:
         name = accounts.resolve_default(af, db)
     return accounts.get_account(af, name)
+
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# ---- in-memory message cache (shared by the prefetch poller + reads) ------------
+_MESSAGE_CACHE = None
+_MESSAGE_CACHE_LOCK = threading.Lock()
+
+
+def message_cache():
+    """Process-wide MessageCache singleton, sized from env. Bounded by BOTH an entry
+    count and a byte budget (whichever trips first), with each cached body trimmed —
+    so worst-case RSS stays small regardless of mailbox/attachment sizes.
+      EMAIL_MCP_CACHE_ENTRIES   (default 256)   max messages held
+      EMAIL_MCP_CACHE_BYTES     (default 32MiB)  max total cached body bytes
+      EMAIL_MCP_CACHE_BODY_MAX  (default 64KiB)  per-message cached-body cap
+      EMAIL_MCP_CACHE_RECENT_TTL(default 180s)   how long a 'latest' view stays fresh
+    """
+    global _MESSAGE_CACHE
+    if _MESSAGE_CACHE is not None:
+        return _MESSAGE_CACHE
+    with _MESSAGE_CACHE_LOCK:               # double-checked: avoid two caches racing
+        if _MESSAGE_CACHE is None:
+            _MESSAGE_CACHE = mcache.MessageCache(
+                max_entries=_env_int("EMAIL_MCP_CACHE_ENTRIES", 256),
+                max_bytes=_env_int("EMAIL_MCP_CACHE_BYTES", 32 * 1024 * 1024),
+                body_max=_env_int("EMAIL_MCP_CACHE_BODY_MAX", 64 * 1024),
+                recent_ttl=_env_int("EMAIL_MCP_CACHE_RECENT_TTL", 180),
+            )
+    return _MESSAGE_CACHE
+
+
+def prefetch_config():
+    """Background prefetch knobs. Interval 0 = OFF (the default — kept off so the
+    watchdog's short-lived `claude -p` runs never start a poller; the interactive
+    registration enables it via EMAIL_MCP_PREFETCH_INTERVAL=120)."""
+    return {
+        "interval": _env_int("EMAIL_MCP_PREFETCH_INTERVAL", 0),
+        "count": _env_int("EMAIL_MCP_PREFETCH_COUNT", 50),
+        "folder": os.environ.get("EMAIL_MCP_PREFETCH_FOLDER", "INBOX"),
+    }

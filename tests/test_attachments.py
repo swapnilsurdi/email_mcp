@@ -20,7 +20,7 @@ ACC = {"name": "a", "email": "me@x.com"}
 
 
 def _fetch(msg):
-    def fetch_fn(acc, message_id, folders):
+    def fetch_fn(acc, message_id, folders, uid=None, folder=None):
         return ("INBOX", msg)
     return fetch_fn
 
@@ -60,7 +60,7 @@ def test_download_ambiguous_returns_available(tmp_path):
 
 
 def test_download_not_found(tmp_path):
-    def miss(acc, mid, folders):
+    def miss(acc, mid, folders, uid=None, folder=None):
         return (None, None)
     res = email_ops.download_attachment(
         ACC, "<gone@x>", folders=["INBOX"], dest_dir=str(tmp_path), fetch_fn=miss)
@@ -124,6 +124,61 @@ def test_download_rejects_oversized(tmp_path, monkeypatch):
     assert res["limit"] == 4 and res["size"] == len(b"way too big")
     # nothing written
     assert not any(p.is_file() for p in tmp_path.iterdir())
+
+
+def test_download_all_writes_every_attachment(tmp_path):
+    msg = _msg(("a.txt", "text/plain", b"alpha"), ("b.txt", "text/plain", b"bravo"))
+    res = email_ops.download_attachment(
+        ACC, "<m@x>", folders=["INBOX"], dest_dir=str(tmp_path),
+        download_all=True, fetch_fn=_fetch(msg))
+    assert res["status"] == "downloaded_all" and res["count"] == 2
+    names = sorted(os.path.basename(r["saved_path"]) for r in res["attachments"])
+    assert names == ["a.txt", "b.txt"]
+
+
+def test_download_all_count_excludes_errors(tmp_path, monkeypatch):
+    monkeypatch.setattr(email_ops, "MAX_INLINE_BYTES", 4)
+    msg = _msg(("ok.txt", "text/plain", b"hi"),
+               ("big.bin", "application/octet-stream", b"too big"))
+    res = email_ops.download_attachment(
+        ACC, "<m@x>", folders=["INBOX"], dest_dir=str(tmp_path),
+        download_all=True, return_base64=True, fetch_fn=_fetch(msg))
+    assert res["count"] == 1                      # only ok.txt inlined; big.bin errored
+    statuses = [a.get("status", a.get("error")) for a in res["attachments"]]
+    assert "inline" in statuses and "attachment_too_large_for_inline" in statuses
+
+
+def test_return_base64_inline_no_disk(tmp_path):
+    import base64
+    msg = _msg(("d.csv", "text/csv", b"x,y\n1,2\n"))
+    res = email_ops.download_attachment(
+        ACC, "<m@x>", folders=["INBOX"], dest_dir=str(tmp_path),
+        return_base64=True, fetch_fn=_fetch(msg))
+    assert res["status"] == "inline"
+    assert base64.b64decode(res["content_base64"]) == b"x,y\n1,2\n"
+    assert "saved_path" not in res
+    assert not any(tmp_path.iterdir())          # nothing written to disk
+
+
+def test_return_base64_rejects_too_large(tmp_path, monkeypatch):
+    monkeypatch.setattr(email_ops, "MAX_INLINE_BYTES", 4)
+    msg = _msg(("d.bin", "application/octet-stream", b"too big data"))
+    res = email_ops.download_attachment(
+        ACC, "<m@x>", folders=["INBOX"], dest_dir=str(tmp_path),
+        return_base64=True, fetch_fn=_fetch(msg))
+    assert res["error"] == "attachment_too_large_for_inline" and res["limit"] == 4
+
+
+def test_uid_folder_passed_to_fetch(tmp_path):
+    seen = {}
+
+    def fetch_fn(acc, message_id, folders, uid=None, folder=None):
+        seen["uid"], seen["folder"] = uid, folder
+        return ("INBOX", _msg(("a.txt", "text/plain", b"x")))
+    email_ops.download_attachment(
+        ACC, "", folders=["INBOX"], dest_dir=str(tmp_path), uid=99, folder="INBOX",
+        fetch_fn=fetch_fn)
+    assert seen["uid"] == 99 and seen["folder"] == "INBOX"
 
 
 def test_send_email_passes_attachments_through(db_path):

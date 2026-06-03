@@ -227,6 +227,76 @@ def test_fetch_message_returns_parsed_message_readonly():
     assert True in fake.select_readonly and False not in fake.select_readonly
 
 
+def test_parse_uid():
+    assert imap_account._parse_uid(b"5 (UID 12345 BODY[] {2048}") == 12345
+    assert imap_account._parse_uid(b"3 (BODY[])") is None
+
+
+class FakeIMAPRecent(FakeIMAP):
+    def __init__(self, all_uids, raw_by_uid, uidvalidity=10):
+        super().__init__()
+        self.all_uids = all_uids
+        self.raw_by_uid = raw_by_uid
+        self.untagged_responses = {"UIDVALIDITY": [str(uidvalidity).encode()]}
+
+    def select(self, folder, readonly=False):
+        return ("OK", [b"1"])
+
+    def uid(self, command, *args):
+        if command == "SEARCH":
+            if "ALL" in args:
+                return ("OK", [b" ".join(str(u).encode() for u in self.all_uids)])
+            spec = args[-1]                       # e.g. "3:*"
+            lo = int(spec.split(":")[0])
+            hits = [u for u in self.all_uids if u >= lo]
+            if not hits and self.all_uids:        # IMAP's N:* always yields the highest
+                hits = [max(self.all_uids)]
+            return ("OK", [b" ".join(str(u).encode() for u in hits)])
+        if command == "FETCH":
+            uids = [int(x) for x in args[0].split(",")]
+            resp = []
+            for u in uids:
+                resp.append((("1 (UID %d BODY[])" % u).encode(), self.raw_by_uid[u]))
+                resp.append(b")")
+            return ("OK", resp)
+        return ("OK", [b"x"])
+
+
+def test_fetch_inbox_recent_full_returns_latest_with_uid():
+    raw = {1: _raw_email(subject="one"), 2: _raw_email(subject="two"),
+           3: _raw_email(subject="three")}
+    fake = FakeIMAPRecent([1, 2, 3], raw, uidvalidity=42)
+    uv, mx, entries = imap_account.fetch_inbox_recent(
+        ACC, "INBOX", 2, since_uid=None, connect_fn=lambda acc: fake)
+    assert uv == 42 and mx == 3
+    assert {e["uid"] for e in entries} == {2, 3}        # last 2 uids
+    assert all(e["uidvalidity"] == 42 for e in entries)
+
+
+def test_fetch_inbox_recent_delta_only_new():
+    raw = {1: _raw_email(subject="one"), 2: _raw_email(subject="two"),
+           3: _raw_email(subject="three")}
+    fake = FakeIMAPRecent([1, 2, 3], raw)
+    uv, mx, entries = imap_account.fetch_inbox_recent(
+        ACC, "INBOX", 10, since_uid=2, connect_fn=lambda acc: fake)
+    assert {e["uid"] for e in entries} == {3} and mx == 3
+
+
+def test_fetch_inbox_recent_delta_none_new():
+    fake = FakeIMAPRecent([1], {1: _raw_email(subject="one")})
+    uv, mx, entries = imap_account.fetch_inbox_recent(
+        ACC, "INBOX", 10, since_uid=1, connect_fn=lambda acc: fake)
+    assert entries == [] and mx == 1                    # nothing strictly newer than 1
+
+
+def test_fetch_message_by_uid_skips_search():
+    fake = FakeIMAPFetchMessage(_raw_email_with_attachment())
+    folder, msg = imap_account.fetch_message(
+        ACC, "", folders=["INBOX"], uid=7, folder="INBOX",
+        connect_fn=lambda acc: fake)
+    assert folder == "INBOX" and msg.get("Subject") == "has attach"
+
+
 def test_fetch_message_not_found_returns_none():
     class NoMatch(FakeIMAPFetchMessage):
         def uid(self, command, *args):

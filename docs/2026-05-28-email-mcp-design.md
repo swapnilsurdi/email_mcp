@@ -187,6 +187,28 @@ each item is `{path}` (read from disk) or `{content: base64, filename}` (+ optio
 `mime_type`). Combined size is capped at 25 MB. The idempotency keys are unchanged (recipient/
 subject/body), so attachments don't affect dedup.
 
+## 9. Cache + server-side search (post-v1)
+
+Added to make "latest emails" fast and to fix search returning false negatives:
+- **In-memory message cache** (`mcache.py`): a thread-safe LRU of parsed emails (headers +
+  extracted text + attachment metadata, never bytes), bounded by entry count AND a byte
+  budget with per-body trimming, plus a per-folder "recent" index with a TTL. **Dual key** —
+  Message-ID (immutable across moves) for content, `uid:folder:uidvalidity` fallback for mail
+  with no/duplicate Message-ID. Process-wide singleton, built to also back a future shared
+  HTTP server (`docs/TODO-http-shared-server.md`).
+- **Prefetch poller** (`prefetch.py`): optional daemon thread (off by default;
+  `EMAIL_MCP_PREFETCH_INTERVAL`) that warms the INBOX cache, delta-driven by UID, read-only.
+- **`get_emails`**: a text `query` (and `from_address`/`subject`/`since`/raw criteria) now
+  runs **server-side over the whole mailbox** (IMAP `TEXT`/`FROM`/…), not a client-side filter
+  over the recent window — so matches outside the window are found. `searched_window_only`
+  flags which mode ran. `body=false` returns headers-only; results carry `uid`/`uidvalidity`
+  and are deduped by Message-ID. The latest-window default is served from the cache when warm.
+- **`send_email`**: `allow_duplicate` (block only true repeats) and `idempotency_key`
+  (caller-controlled) relax the recipient-only guard; the ledger records exactly the keys it
+  checks so modes don't interfere.
+- **`download_attachment`**: `download_all`, `return_base64` (small files inline), and
+  `uid`+`folder` direct locate.
+
 ## 5. Send idempotency (detailed)
 
 On each `send_email`, compute **three independent keys** from the normalized message:
