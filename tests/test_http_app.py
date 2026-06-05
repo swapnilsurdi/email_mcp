@@ -149,8 +149,10 @@ def test_dashboard_login_flow(client):
     t = login(client)
     r = client.get(f"/?token={t}", follow_redirects=False)
     assert r.status_code == 303 and http_app.SESSION_COOKIE in r.cookies
+    session = r.cookies[http_app.SESSION_COOKIE]
+    assert session != t       # the cookie is a fresh value, not the URL token
 
-    client.cookies.set(http_app.SESSION_COOKIE, t)
+    client.cookies.set(http_app.SESSION_COOKIE, session)
     r = client.get("/")
     assert "Connect a mailbox" in r.text
 
@@ -168,6 +170,50 @@ def test_dashboard_login_flow(client):
 def test_dashboard_invalid_token_shows_error(client):
     r = client.get("/?token=bogus")
     assert "invalid or expired" in r.text
+
+
+def dash_session(client):
+    """Redeem a fresh login link and install the resulting session cookie."""
+    t = login(client)
+    r = client.get(f"/?token={t}", follow_redirects=False)
+    session = r.cookies[http_app.SESSION_COOKIE]
+    client.cookies.set(http_app.SESSION_COOKIE, session)
+    return t, session
+
+
+def test_login_link_is_single_use(client):
+    t, _ = dash_session(client)
+    client.cookies.clear()
+    r = client.get(f"/?token={t}")                  # second redemption attempt
+    assert "invalid or expired" in r.text
+    # and the redeemed value no longer works as an API Bearer token either
+    assert client.get("/api/mailboxes", headers=auth_hdr(t)).status_code == 401
+
+
+def test_signout_invalidates_session_server_side(client):
+    _, session = dash_session(client)
+    assert "Connect a mailbox" in client.get("/").text
+    client.post("/dash/signout")
+    client.cookies.set(http_app.SESSION_COOKIE, session)   # replay the old value
+    assert "How to sign in" in client.get("/").text
+
+
+def test_dash_post_rejects_cross_origin(client):
+    dash_session(client)
+    r = client.post("/dash/tokens", data={"label": "x"},
+                    headers={"Origin": "https://elsewhere.test"})
+    assert r.status_code == 403
+    # a matching Origin is fine
+    r = client.post("/dash/mailbox", data={"email": "bob@icloud.com", "password": "pw",
+                                           "imap_host": "i", "imap_port": "993",
+                                           "smtp_host": "s", "smtp_port": "587"},
+                    headers={"Origin": "https://email-mcp.test"})
+    assert r.status_code == 200
+
+
+def test_referrer_policy_header_everywhere(client):
+    assert client.get("/").headers["Referrer-Policy"] == "no-referrer"
+    assert client.get("/health").headers["Referrer-Policy"] == "no-referrer"
 
 
 # ---- MCP over HTTP ------------------------------------------------------------------------

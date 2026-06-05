@@ -40,7 +40,8 @@ def main(argv=None):
         print(f"user:  {args.matrix_user} (id {uid})")
         print(f"token: {raw}")
         print(f"link:  {base}/?token={raw}")
-        print(f"valid: {args.ttl}s")
+        print(f"valid: {args.ttl}s — the link signs in ONCE (it swaps for a session "
+              "cookie); unredeemed, the token also works as an API Bearer value")
 
 
 if __name__ == "__main__":

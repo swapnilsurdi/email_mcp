@@ -68,6 +68,28 @@ def test_login_token_lifecycle(hdb):
     assert db.validate_login_token(hdb, "bogus", now=1050.0) is None
 
 
+def test_login_token_consume_is_single_use(hdb):
+    uid = db.get_or_create_user(hdb, "@bob:chat", now=1000.0)
+    raw = db.issue_login_token(hdb, uid, now=1000.0, ttl=100)
+    assert db.consume_login_token(hdb, raw, now=1050.0) == uid
+    assert db.consume_login_token(hdb, raw, now=1050.0) is None       # already redeemed
+    assert db.validate_login_token(hdb, raw, now=1050.0) is None      # dead everywhere
+    # expired tokens can't be redeemed at all
+    raw2 = db.issue_login_token(hdb, uid, now=1000.0, ttl=100)
+    assert db.consume_login_token(hdb, raw2, now=1101.0) is None
+
+
+def test_session_lifecycle(hdb):
+    uid = db.get_or_create_user(hdb, "@bob:chat", now=1000.0)
+    raw = db.create_session(hdb, uid, now=1000.0, ttl=100)
+    assert db.validate_session(hdb, raw, now=1050.0) == uid
+    assert db.validate_session(hdb, raw, now=1101.0) is None          # expired
+    assert db.validate_session(hdb, "bogus", now=1050.0) is None
+    raw2 = db.create_session(hdb, uid, now=1000.0, ttl=100)
+    db.delete_session(hdb, raw2)
+    assert db.validate_session(hdb, raw2, now=1050.0) is None         # signed out
+
+
 def test_auth_token_create_resolve_usage(hdb):
     uid = db.get_or_create_user(hdb, "@bob:chat", now=1.0)
     mid = db.create_mailbox(hdb, uid, "p", "bob@icloud.com", "i", 993, "s", 587, "pw",

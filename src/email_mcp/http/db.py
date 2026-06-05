@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS login_tokens (
   expires_at REAL NOT NULL,
   consumed   INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL,
+  created_at REAL NOT NULL,
+  expires_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS auth_tokens (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   mailbox_id   INTEGER NOT NULL,
@@ -235,16 +241,60 @@ def issue_login_token(db_path, user_id, now, ttl=86400):
 
 
 def validate_login_token(db_path, raw, now):
-    """Return the user_id for a non-expired login token, else None. Valid for the whole
-    TTL window (used to (re)establish a dashboard session), not single-use."""
+    """Return the user_id for a non-expired, unredeemed login token, else None. Used for
+    Bearer-header API auth; once the token has been redeemed for a dashboard session
+    (consume_login_token) it no longer validates anywhere."""
     with store.connect(db_path) as conn:
         cur = conn.execute(
-            "SELECT user_id, expires_at FROM login_tokens WHERE token_hash=?",
+            "SELECT user_id, expires_at FROM login_tokens "
+            "WHERE token_hash=? AND consumed=0", (hash_token(raw),))
+        row = cur.fetchone()
+        if not row or row[1] < now:
+            return None
+        return row[0]
+
+
+def consume_login_token(db_path, raw, now):
+    """Single-use redemption of a login token (the dashboard sign-in link): atomically
+    mark it consumed and return its user_id, or None if unknown/expired/already used."""
+    with store.connect(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE login_tokens SET consumed=1 "
+            "WHERE token_hash=? AND consumed=0 AND expires_at>=?",
+            (hash_token(raw), now))
+        if cur.rowcount != 1:
+            return None
+        cur = conn.execute("SELECT user_id FROM login_tokens WHERE token_hash=?",
+                           (hash_token(raw),))
+        return cur.fetchone()[0]
+
+
+# ---- dashboard sessions (minted on login-token redemption; never appear in URLs) ----
+
+def create_session(db_path, user_id, now, ttl=86400):
+    raw = new_token()
+    with store.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO sessions(token_hash, user_id, created_at, expires_at) "
+            "VALUES(?,?,?,?)", (hash_token(raw), user_id, now, now + ttl))
+    return raw
+
+
+def validate_session(db_path, raw, now):
+    with store.connect(db_path) as conn:
+        cur = conn.execute(
+            "SELECT user_id, expires_at FROM sessions WHERE token_hash=?",
             (hash_token(raw),))
         row = cur.fetchone()
         if not row or row[1] < now:
             return None
         return row[0]
+
+
+def delete_session(db_path, raw):
+    """Sign-out: drop the session row so the cookie value is dead server-side."""
+    with store.connect(db_path) as conn:
+        conn.execute("DELETE FROM sessions WHERE token_hash=?", (hash_token(raw),))
 
 
 # ---- agent auth tokens ------------------------------------------------------------

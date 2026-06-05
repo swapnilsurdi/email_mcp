@@ -12,6 +12,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -37,12 +38,15 @@ def _master_key():
 # ---- request auth helpers ------------------------------------------------------------
 
 def _login_user(request, db_path, now=None):
-    """The dashboard/API human: a valid 24h login token via cookie or Bearer header.
-    Returns the user row or None."""
+    """The dashboard/API human: a session cookie (minted on login-link redemption) or an
+    unredeemed 24h login token as a Bearer header. Returns the user row or None."""
     now = now or time.time()
     raw = request.cookies.get(SESSION_COOKIE)
-    if not raw:
-        raw = auth.parse_bearer(request.headers.get("authorization", ""))
+    if raw:
+        user_id = db.validate_session(db_path, raw, now)
+        if user_id:
+            return db.get_user(db_path, user_id)
+    raw = auth.parse_bearer(request.headers.get("authorization", ""))
     if not raw:
         return None
     user_id = db.validate_login_token(db_path, raw, now)
@@ -115,6 +119,14 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
             yield
 
     app = FastAPI(title="email-mcp", lifespan=lifespan, docs_url=None, redoc_url=None)
+
+    @app.middleware("http")
+    async def referrer_policy(request, call_next):
+        # login links carry a secret in the query string; never let it ride a Referer
+        resp = await call_next(request)
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        return resp
+
     if mcp is not None:
         app.mount("/mcp", auth.MCPAuthMiddleware(mcp.streamable_http_app(), db_path_fn))
         # Starlette redirects a bare POST /mcp -> /mcp/ (307). MCP clients shouldn't
@@ -314,13 +326,18 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
     def dash_root(request: Request, token: str = None, flash: str = None):
         db_path = db_path_fn()
         if token:
-            if db.validate_login_token(db_path, token, time.time()) is None:
+            # single-use redemption: the URL value is consumed here and exchanged for a
+            # freshly-minted session value, so it can't be replayed from logs/history
+            now = time.time()
+            uid = db.consume_login_token(db_path, token, now)
+            if uid is None:
                 return _templates.TemplateResponse(request, "landing.html", {
                     "user": None, "error": "That sign-in link is invalid or expired — "
                                            "send `login` to the bot again.",
                     "bot": db.get_service_identity(db_path, "matrix_user")})
+            session = db.create_session(db_path, uid, now)
             resp = RedirectResponse("/", status_code=303)
-            resp.set_cookie(SESSION_COOKIE, token, max_age=86400, httponly=True,
+            resp.set_cookie(SESSION_COOKIE, session, max_age=86400, httponly=True,
                             samesite="lax", secure=base.startswith("https"))
             return resp
         user = _login_user(request, db_path)
@@ -330,7 +347,19 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
                 "bot": db.get_service_identity(db_path, "matrix_user")})
         return _home(request, user, flash=flash)
 
+    def _check_same_origin(request):
+        """The dash forms are cookie-authenticated, so reject any browser-attributed
+        cross-origin POST (Origin, falling back to Referer). Layered on the cookie's
+        samesite=lax; requests without either header (CLIs, tests) pass through."""
+        src = request.headers.get("origin") or request.headers.get("referer")
+        if not src:
+            return
+        b, s = urlsplit(base), urlsplit(src)
+        if (s.scheme, s.netloc) != (b.scheme, b.netloc):
+            raise HTTPException(403, "cross-origin form submission rejected")
+
     def _dash_user(request):
+        _check_same_origin(request)
         user = _login_user(request, db_path_fn())
         if user is None:
             raise HTTPException(401, "session expired — send `login` to the bot again")
@@ -338,6 +367,10 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
 
     @app.post("/dash/signout")
     def dash_signout(request: Request):
+        _check_same_origin(request)
+        raw = request.cookies.get(SESSION_COOKIE)
+        if raw:
+            db.delete_session(db_path_fn(), raw)
         resp = RedirectResponse("/", status_code=303)
         resp.delete_cookie(SESSION_COOKIE)
         return resp
