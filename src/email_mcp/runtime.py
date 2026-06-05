@@ -2,7 +2,7 @@ import os
 import threading
 from pathlib import Path
 
-from email_mcp import accounts, mcache, store
+from email_mcp import accounts, mcache, security, store
 
 _DEFAULT_DB = Path.home() / ".local/state/email-mcp/state.db"
 _DEFAULT_DOWNLOAD_DIR = Path.home() / ".local/state/email-mcp/attachments"
@@ -56,6 +56,12 @@ def effective_account(name=None):
     if name is None:
         name = accounts.resolve_default(af, db)
     return accounts.get_account(af, name)
+
+
+def security_policy():
+    """The security policy from the accounts file's `security:` section. Loaded per
+    call (like the accounts themselves) so config edits apply without a restart."""
+    return security.load_policy(accounts_file())
 
 
 def _env_int(name, default):

@@ -2,7 +2,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from email_mcp import cache, ledger, mcache as _mcache, textutil
+from email_mcp import cache, ledger, mcache as _mcache, security, textutil
 from email_mcp.providers import imap_account, smtp_send
 
 DEFAULT_WINDOW_DAYS = 90
@@ -128,7 +128,7 @@ def _render(msg, strip_to_text, body):
 def get_emails(db_path, acc, filters, query, folders, include_sent,
                strip_to_text, page, page_size, cached=False,
                body=True, from_=None, subject=None, since=None,
-               has_attachment=False, fresh=False, mc=None,
+               has_attachment=False, fresh=False, mc=None, policy=None,
                fetch_fn=imap_account.fetch_folder,
                folders_fn=imap_account.list_folders, now=None):
     """Fetch or search. Never marks read.
@@ -147,6 +147,13 @@ def get_emails(db_path, acc, filters, query, folders, include_sent,
     # explicit folders=[...] (e.g. the warm-cache INBOX read) pays no round-trip.
     target = folders if folders else _select_folders(
         folders_fn(acc), None, include_sent)
+    folders_denied = []
+    if policy is not None:
+        folders_denied = [f for f in target if not policy.folder_readable(f)]
+        target = policy.filter_readable(target)
+        if not target:
+            return {"error": "folders_blocked", "folders_denied": folders_denied,
+                    "detail": "security policy denies reading every requested folder"}
     criteria, did_server_search, client_query = _build_criteria(
         filters, query, from_, subject, since)
     searched_window_only = not (did_server_search or cached)
@@ -178,7 +185,7 @@ def get_emails(db_path, acc, filters, query, folders, include_sent,
         page_items, truncated = textutil.truncate_to_budget(page_items, MAX_TOKENS)
     else:
         truncated = False
-    return {
+    out = {
         "emails": page_items,
         "page": page,
         "page_size": page_size,
@@ -187,17 +194,37 @@ def get_emails(db_path, acc, filters, query, folders, include_sent,
         "from_cache": from_cache,
         "searched_window_only": searched_window_only,
     }
+    if folders_denied:
+        out["folders_denied"] = folders_denied
+    return out
 
 
 def send_email(db_path, acc, to, subject, body, tags, attachments=None,
-               allow_duplicate=False, idempotency_key=None,
+               allow_duplicate=False, idempotency_key=None, policy=None,
                send_fn=smtp_send.send, now=None):
     """Idempotent send. By default a second mail to the same recipients within 10 min
     is BLOCKED (the runaway guard). `allow_duplicate=True` relaxes that to block only a
     true repeat (same recipients AND same subject/body), so distinct messages to the
     same person go through. `idempotency_key` overrides entirely: the send blocks iff
-    that exact key was used inside the window — caller-controlled dedup."""
+    that exact key was used inside the window — caller-controlled dedup.
+    A security `policy` with allowed_recipients blocks any send whose recipients don't
+    all match — checked FIRST, before SMTP and before the ledger (never recorded)."""
     now = time.time() if now is None else now
+    # Canonicalize recipients to bare addresses with the SAME parser SMTP uses, so the
+    # allowlist check, the dedup ledger, and the envelope all see one identical set. This
+    # also closes the multi-address-element case where one entry like
+    # "ok@x.com, other@y.com" smuggles a second envelope past a per-element match.
+    to = security.expand_recipients(to)
+    if not to:
+        return {"status": "BLOCKED", "reason": "no_valid_recipients",
+                "detail": "no parseable recipient address was supplied."}
+    if policy is not None:
+        denied = policy.denied_recipients(to)
+        if denied:
+            return {"status": "BLOCKED", "reason": "recipient_not_allowed",
+                    "denied_recipients": denied,
+                    "detail": "security.allowed_recipients does not match these "
+                              "recipients; edit the accounts file to allow them."}
     # Resolve which dedup keys this send uses, and check+record the SAME set so a send
     # in one mode never arms a key that surprises a send in another mode.
     if idempotency_key:
@@ -278,13 +305,22 @@ def _emit_attachment(att_name, mime_type, data, dest_dir, overwrite, return_base
 
 def download_attachment(acc, message_id, folders, dest_dir, filename=None,
                         index=None, overwrite=False, download_all=False,
-                        return_base64=False, uid=None, folder=None,
+                        return_base64=False, uid=None, folder=None, policy=None,
                         fetch_fn=imap_account.fetch_message):
     """Fetch a message (read-only; never marks read) and save/return its attachment(s).
     Select one by `filename` or `index`; `download_all=True` takes every attachment; a
     lone attachment needs no selector. `return_base64=True` returns bytes inline (small
     files only) instead of writing to disk. `uid`+`folder` locate the message directly
-    (robust for absent/duplicate Message-IDs). Misses return a structured {error}."""
+    (robust for absent/duplicate Message-IDs). Misses return a structured {error}.
+    A security `policy` confines the search/fetch to readable folders."""
+    if policy is not None:
+        if folder is not None and not policy.folder_readable(folder):
+            return {"error": "folder_blocked", "folder": folder,
+                    "message_id": message_id}
+        folders = policy.filter_readable(folders)
+        if not folders and folder is None:
+            return {"error": "folders_blocked", "message_id": message_id,
+                    "detail": "security policy denies reading every search folder"}
     if not return_base64:
         os.makedirs(dest_dir, exist_ok=True)
     found_folder, msg = fetch_fn(acc, message_id, folders, uid=uid, folder=folder)

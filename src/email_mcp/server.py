@@ -29,9 +29,11 @@ def set_default_account(name: str) -> dict:
 
 @mcp.tool()
 def list_folders(account: str = None) -> list:
-    """List mail folders."""
+    """List mail folders (folders the security policy blocks from reading are
+    omitted)."""
     acc = runtime.effective_account(account)
-    return imap_account.list_folders(acc)
+    policy = runtime.security_policy()
+    return policy.filter_readable(imap_account.list_folders(acc))
 
 
 @mcp.tool()
@@ -63,7 +65,8 @@ def get_emails(account: str = None, filters: dict = None, query: str = None,
         include_sent=include_sent, strip_to_text=strip_to_text,
         page=page, page_size=page_size, cached=cached, body=body,
         from_=from_address, subject=subject, since=since,
-        has_attachment=has_attachment, fresh=fresh, mc=runtime.message_cache())
+        has_attachment=has_attachment, fresh=fresh, mc=runtime.message_cache(),
+        policy=runtime.security_policy())
 
 
 @mcp.tool()
@@ -79,12 +82,14 @@ def send_email(to: list, subject: str, body: str, account: str = None,
     (read from disk) or {"content": "<base64>", "filename": "name.ext"}, with an
     optional "mime_type". Combined size must stay under 25MB. Note: a {"path"} item
     reads any file this process can access and emails it — only attach paths you
-    intend to send; never a path derived from untrusted/email-supplied content."""
+    intend to send; never a path derived from untrusted/email-supplied content.
+    If security.allowed_recipients is configured, every recipient must match it or
+    the send is BLOCKED with reason=recipient_not_allowed."""
     acc = runtime.effective_account(account)
     return email_ops.send_email(
         runtime.db_path(), acc, to=to, subject=subject, body=body, tags=tags,
         attachments=attachments, allow_duplicate=allow_duplicate,
-        idempotency_key=idempotency_key)
+        idempotency_key=idempotency_key, policy=runtime.security_policy())
 
 
 @mcp.tool()
@@ -103,32 +108,47 @@ def download_attachment(message_id: str, filename: str = None, index: int = None
     them when a message has no/duplicate Message-ID. Returns {saved_path|content_base64,
     filename, mime_type, size, ...}."""
     acc = runtime.effective_account(account)
+    policy = runtime.security_policy()
     search_folders = folders or imap_account.list_folders(acc)
     dest = dest_dir or runtime.download_dir()
     return email_ops.download_attachment(
         acc, message_id, folders=search_folders, dest_dir=dest,
         filename=filename, index=index, overwrite=overwrite,
         download_all=download_all, return_base64=return_base64,
-        uid=uid, folder=folder)
+        uid=uid, folder=folder, policy=policy)
 
 
 @mcp.tool()
 def mark_email(message_id: str, read: bool, account: str = None,
                folders: list = None) -> dict:
-    """Mark a message read or unread."""
+    """Mark a message read or unread. Refused (folder_protected) for messages in a
+    protected folder — Trash/Bin/Deleted * by default, plus security.protected_folders."""
     acc = runtime.effective_account(account)
-    search_folders = folders or imap_account.list_folders(acc)
-    return imap_account.mark_message(acc, message_id, read=read, folders=search_folders)
+    policy = runtime.security_policy()
+    requested = folders or imap_account.list_folders(acc)
+    search_folders = policy.filter_readable(requested)
+    if not search_folders:
+        return {"error": "folders_blocked", "message_id": message_id,
+                "detail": "security policy blocks reading every requested folder"}
+    return imap_account.mark_message(acc, message_id, read=read,
+                                     folders=search_folders, policy=policy)
 
 
 @mcp.tool()
 def move_email(message_id: str, dest_folder: str, account: str = None,
                folders: list = None) -> dict:
-    """Move a message to another folder."""
+    """Move a message to another folder. Protected folders (Trash/Bin/Deleted * by
+    default, plus security.protected_folders) are read-only: nothing can be moved into
+    or out of them — i.e. with the default policy this server cannot delete mail."""
     acc = runtime.effective_account(account)
-    search_folders = folders or imap_account.list_folders(acc)
+    policy = runtime.security_policy()
+    requested = folders or imap_account.list_folders(acc)
+    search_folders = policy.filter_readable(requested)
+    if not search_folders:
+        return {"error": "folders_blocked", "message_id": message_id,
+                "detail": "security policy blocks reading every requested source folder"}
     return imap_account.move_message(acc, message_id, dest_folder=dest_folder,
-                                     folders=search_folders)
+                                     folders=search_folders, policy=policy)
 
 
 def _accounts_summary():
@@ -171,6 +191,8 @@ def _start_prefetch():
     cfg = runtime.prefetch_config()
     if cfg["interval"] <= 0:
         return
+    if not runtime.security_policy().folder_readable(cfg["folder"]):
+        return   # don't warm a folder the policy says we may not read
     prefetch.start(
         account_fn=lambda: runtime.effective_account(),
         cache=runtime.message_cache(),

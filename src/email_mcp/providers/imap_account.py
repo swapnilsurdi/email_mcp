@@ -309,12 +309,17 @@ def fetch_message(acc, message_id, folders, uid=None, folder=None,
         _safe_logout(imap)
 
 
-def mark_message(acc, message_id, read, folders, connect_fn=_default_connect):
+def mark_message(acc, message_id, read, folders, policy=None,
+                 connect_fn=_default_connect):
     imap = connect_fn(acc)
     try:
         folder, uid = _locate(imap, message_id, folders)
         if not uid:
             return {"error": "not_found", "message_id": message_id}
+        if policy is not None and policy.folder_protected(folder):
+            return {"error": "folder_protected", "folder": folder,
+                    "message_id": message_id,
+                    "detail": "protected folders are read-only (no flag changes)"}
         op = "+FLAGS" if read else "-FLAGS"
         imap.uid("STORE", uid, op, "(\\Seen)")
         return {"message_id": message_id, "read": read, "folder": folder}
@@ -322,12 +327,30 @@ def mark_message(acc, message_id, read, folders, connect_fn=_default_connect):
         _safe_logout(imap)
 
 
-def move_message(acc, message_id, dest_folder, folders, connect_fn=_default_connect):
+def move_message(acc, message_id, dest_folder, folders, policy=None,
+                 connect_fn=_default_connect):
+    # Destination checks are local — fail before touching the server. The built-in case
+    # is Trash/Bin/Deleted *: with the default policy nothing can be moved INTO trash
+    # (i.e. this server cannot delete mail) or OUT of it.
+    if policy is not None and policy.folder_protected(dest_folder):
+        return {"error": "folder_protected", "folder": dest_folder,
+                "message_id": message_id,
+                "detail": "protected folders are read-only (cannot move into them)"}
+    # A folder the policy blocks from reading is off-limits as a destination too —
+    # otherwise mail could be parked somewhere the MCP is not allowed to see.
+    if policy is not None and not policy.folder_readable(dest_folder):
+        return {"error": "folder_blocked", "folder": dest_folder,
+                "message_id": message_id,
+                "detail": "destination folder is blocked by the security policy"}
     imap = connect_fn(acc)
     try:
         folder, uid = _locate(imap, message_id, folders)
         if not uid:
             return {"error": "not_found", "message_id": message_id}
+        if policy is not None and policy.folder_protected(folder):
+            return {"error": "folder_protected", "folder": folder,
+                    "message_id": message_id,
+                    "detail": "protected folders are read-only (cannot move out of them)"}
         dest = _encode_folder(dest_folder)
         status, _ = imap.uid("MOVE", uid, dest)
         if status != "OK":

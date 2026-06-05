@@ -49,6 +49,34 @@ list_accounts, set_default_account, list_folders, get_emails (recency by default
 search via query/filters; per-message `attachments` metadata), download_attachment,
 send_email (idempotent; optional `attachments`), mark_email, move_email.
 
+### Security policy
+Optional `security:` section in the accounts file (all patterns are case-insensitive
+**full-match** regexes; plain values work as-is — see `config/accounts.example.yml`):
+- **`allowed_recipients`** — when set, every `send_email` recipient must match one or
+  the send is `BLOCKED (recipient_not_allowed)` before SMTP and before the dedup
+  ledger. Unset = allow all; an explicitly empty list blocks all sends. Each recipient
+  is first canonicalized to its bare address(es) with the same parser SMTP uses, so a
+  single entry bundling extra addresses behind a comma or display name
+  (`"ok@x.com, other@y.com"`) is checked address-by-address — and that same canonical
+  set is what reaches SMTP and the dedup ledger.
+- **Trash is protected by default** — the reserved trash names of the major providers
+  (`Trash`, `Bin` for Gmail UK, `Deleted Messages` for iCloud, `Deleted Items` for
+  Outlook, subfolders included) are **read-only**: nothing can be moved into or out of
+  them and messages there can't be flagged or expunged. Since moving-to-trash is the
+  only delete this server has, **the MCP cannot delete mail at all** under the default
+  policy. Opt out with `protect_trash: false` (applies on the next call). Note: a bare
+  `Deleted` (some Exchange/O365/Dovecot setups) is **not** auto-matched — add it to
+  `protected_folders`.
+- **`protected_folders`** — additional read-only folders (same semantics as trash).
+- **`readable_folders`** / **`blocked_folders`** — gate reading (`get_emails`,
+  `download_attachment`, folder listing, and the folder sets searched for mutations).
+  A blocked folder is also refused as a `move_email` **destination**. When
+  `readable_folders` is set only matching folders are readable; `blocked_folders`
+  always wins. Blocked folders are also omitted from `list_folders`.
+Policy violations return structured results (`folder_protected`, `folder_blocked`,
+`folders_blocked`, `recipient_not_allowed`) — never exceptions. Config is re-read per
+call, so edits apply without restarting the server.
+
 ### Searching & speed
 - **`get_emails` has two modes**, reported by `searched_window_only` in the result:
   - *No search terms* → fast: the most-recent `page*page_size` per folder, served from

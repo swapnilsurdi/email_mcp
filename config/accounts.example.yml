@@ -8,6 +8,24 @@
 # Fields: name (handle + Keychain key), email (login address), imap_host/imap_port,
 # smtp_host/smtp_port, default (optional; exactly one account may be true).
 
+# Optional security policy (all keys optional; patterns are case-insensitive
+# FULL-MATCH regexes — plain values work as-is):
+#
+# security:
+#   allowed_recipients:          # send_email: every recipient must match one.
+#     - you@icloud\.com          #   Unset = allow all. EMPTY list = block all sends.
+#     - .*@yourdomain\.com
+#   protected_folders:           # read-only folders: no move in/out, no mark/expunge.
+#     - Archive(/.*)?            #   Trash/Bin/Deleted Items/Deleted Messages are ALWAYS
+#     - Deleted                  #   protected; a bare "Deleted" (some Exchange/O365) is
+#   protect_trash: true          #   NOT — list it here. Set protect_trash false to lift
+#                                #   the built-in trash protection (applies on next call).
+#   readable_folders:            # if set, ONLY matching folders can be read.
+#     - INBOX
+#     - Receipts(/.*)?
+#   blocked_folders:             # never readable (wins over readable_folders).
+#     - Private(/.*)?
+
 accounts:
   - name: icloud-personal
     email: you@icloud.com
