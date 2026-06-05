@@ -99,6 +99,19 @@ class SecurityPolicy:
         return [f for f in folders if self.folder_readable(f)]
 
 
+def policy_from_mapping(sec):
+    """Build a SecurityPolicy from a plain dict (the `security:` mapping). Shared by the
+    file loader and the HTTP service's per-mailbox `policy_json`."""
+    sec = sec or {}
+    return SecurityPolicy(
+        allowed_recipients=sec.get("allowed_recipients"),
+        protected_folders=sec.get("protected_folders"),
+        readable_folders=sec.get("readable_folders"),
+        blocked_folders=sec.get("blocked_folders"),
+        protect_trash=sec.get("protect_trash", True),
+    )
+
+
 def load_policy(accounts_file):
     """Build the policy from the accounts file's top-level `security:` section.
     A missing file or section yields the permissive default (trash still protected)."""
@@ -107,11 +120,4 @@ def load_policy(accounts_file):
             data = yaml.safe_load(f) or {}
     except (FileNotFoundError, OSError):
         data = {}
-    sec = data.get("security") or {}
-    return SecurityPolicy(
-        allowed_recipients=sec.get("allowed_recipients"),
-        protected_folders=sec.get("protected_folders"),
-        readable_folders=sec.get("readable_folders"),
-        blocked_folders=sec.get("blocked_folders"),
-        protect_trash=sec.get("protect_trash", True),
-    )
+    return policy_from_mapping(data.get("security"))

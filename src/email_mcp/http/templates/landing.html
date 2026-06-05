@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<p>This is the <strong>email-mcp</strong> service — multi-account email for your agents,
+with scoped keys and approval-gated sending.</p>
+{% if error %}<p class="bad">{{ error }}</p>{% endif %}
+<h2>How to sign in</h2>
+<ol>
+  <li>DM the service's Matrix bot{% if bot %} (<code>{{ bot }}</code>){% endif %} and send
+      <code>login</code>.</li>
+  <li>It replies with a sign-in link (valid 24&nbsp;hours) that opens this dashboard.</li>
+</ol>
+<p class="note">Agents: fetch <a href="/info"><code>/info</code></a> for the
+machine-readable setup guide.</p>
+{% endblock %}

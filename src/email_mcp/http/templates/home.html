@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if flash %}<p class="{{ 'ok' if not flash_error else 'bad' }}">{{ flash }}</p>{% endif %}
+{% if new_key %}
+<h2>🔑 New agent key — shown once, store it now</h2>
+<p><span class="key">{{ new_key }}</span></p>
+<p class="note">Use it as <code>Authorization: Bearer &lt;key&gt;</code> against
+<code>{{ base_url }}/mcp</code>.</p>
+{% endif %}
+
+<h2>Mailboxes</h2>
+{% if mailboxes %}
+<table>
+  <tr><th>email</th><th>IMAP</th><th>SMTP</th><th>status</th><th></th></tr>
+  {% for m in mailboxes %}
+  <tr>
+    <td>{{ m.email }}</td>
+    <td>{{ m.imap_host }}:{{ m.imap_port }}</td>
+    <td>{{ m.smtp_host }}:{{ m.smtp_port }}</td>
+    <td>{% if m.enc_password %}<span class="pill ok">connected</span>
+        {% else %}<span class="pill bad">disconnected</span>{% endif %}</td>
+    <td>
+      <form class="inline" method="post" action="/dash/mailboxes/{{ m.id }}/disconnect">
+        <button>disconnect</button></form>
+      <form class="inline" method="post" action="/dash/mailboxes/{{ m.id }}/delete"
+            onsubmit="return confirm('Delete this mailbox? The email is freed for re-registration.')">
+        <button class="danger">delete</button></form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="note">No mailbox yet — connect one below.</p>{% endif %}
+
+<h2>{{ 'Reconnect / update mailbox' if mailboxes else 'Connect a mailbox' }}</h2>
+<form method="post" action="/dash/mailbox">
+  <div class="grid">
+    <label>Email <input name="email" required placeholder="you@icloud.com"
+      value="{{ mailboxes[0].email if mailboxes else '' }}"></label>
+    <label>App password <input name="password" type="password" required></label>
+    <label>IMAP host <input name="imap_host" required
+      value="{{ mailboxes[0].imap_host if mailboxes else 'imap.mail.me.com' }}"></label>
+    <label>IMAP port <input name="imap_port" type="number"
+      value="{{ mailboxes[0].imap_port if mailboxes else 993 }}"></label>
+    <label>SMTP host <input name="smtp_host" required
+      value="{{ mailboxes[0].smtp_host if mailboxes else 'smtp.mail.me.com' }}"></label>
+    <label>SMTP port <input name="smtp_port" type="number"
+      value="{{ mailboxes[0].smtp_port if mailboxes else 587 }}"></label>
+    <label>Allowed recipients <input name="allowed_recipients"
+      placeholder="comma-separated regexes; empty = ask/block per policy"
+      value="{{ policy.allowed_recipients|join(', ') if policy.allowed_recipients else '' }}"></label>
+    <label>Blocked recipients <input name="blocked_recipients"
+      placeholder="comma-separated regexes"
+      value="{{ policy.blocked_recipients|join(', ') if policy.blocked_recipients else '' }}"></label>
+  </div>
+  <p><button>Save mailbox</button></p>
+  <p class="note">The password is stored encrypted (AES-GCM, host master key). Trash is
+  protected by default — agents cannot delete mail.</p>
+</form>
+
+{% if mailboxes %}
+<h2>Agent keys</h2>
+{% if tokens %}
+<table>
+  <tr><th>label</th><th>key</th><th>scopes</th><th>reads</th><th>searches</th>
+      <th>sends</th><th>blocked</th><th>state</th><th></th></tr>
+  {% for t in tokens %}
+  <tr>
+    <td>{{ t.label }}</td>
+    <td class="note">{{ t.prefix }}…</td>
+    <td>{{ t.scopes }}</td>
+    <td>{{ t.cnt_read }}</td><td>{{ t.cnt_search }}</td>
+    <td>{{ t.cnt_send }}</td><td>{{ t.cnt_blocked }}</td>
+    <td>{% if t.revoked %}<span class="pill bad">revoked</span>
+        {% elif t.active %}<span class="pill ok">active</span>
+        {% else %}<span class="pill">paused</span>{% endif %}</td>
+    <td>
+      {% if not t.revoked %}
+      <form class="inline" method="post" action="/dash/tokens/{{ t.id }}/toggle">
+        <button>{{ 'pause' if t.active else 'resume' }}</button></form>
+      <form class="inline" method="post" action="/dash/tokens/{{ t.id }}/revoke"
+            onsubmit="return confirm('Permanently revoke this key?')">
+        <button class="danger">revoke</button></form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="note">No agent keys yet.</p>{% endif %}
+
+<h3>Create a key</h3>
+<form method="post" action="/dash/tokens">
+  <label>Label <input name="label" required placeholder="orchestrator-main"></label>
+  <label>Scopes
+    <select name="scopes" multiple size="5">
+      <option value="read" selected>read</option>
+      <option value="write">write</option>
+      <option value="send">send</option>
+      <option value="mint">mint (orchestrator)</option>
+      <option value="admin">admin</option>
+    </select>
+  </label>
+  <button>Create key</button>
+</form>
+{% endif %}
+
+{% endblock %}

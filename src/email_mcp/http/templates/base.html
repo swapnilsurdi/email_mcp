@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>email-mcp</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 880px; margin: 2rem auto;
+         padding: 0 1rem; }
+  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #8884; }
+  form.inline { display: inline; }
+  input, select { font: inherit; padding: .3rem .4rem; margin: .15rem 0;
+                  border: 1px solid #8886; border-radius: 6px; }
+  button { font: inherit; padding: .35rem .8rem; border-radius: 8px;
+           border: 1px solid #8886; cursor: pointer; }
+  button.danger { border-color: #c0392b; color: #c0392b; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          gap: .4rem .8rem; }
+  .pill { display: inline-block; padding: .05rem .55rem; border-radius: 999px;
+          font-size: .8rem; border: 1px solid #8886; }
+  .ok { color: #1e8e3e; } .bad { color: #c0392b; }
+  .key { font-family: ui-monospace, monospace; background: #8882; padding: .2rem .5rem;
+         border-radius: 6px; word-break: break-all; }
+  .note { font-size: .85rem; opacity: .75; }
+  header { display: flex; justify-content: space-between; align-items: baseline; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📧 email-mcp</h1>
+  {% if user %}<span class="note">{{ user.matrix_user }} ·
+    <form class="inline" method="post" action="/dash/signout"><button>sign out</button></form>
+  </span>{% endif %}
+</header>
+{% block content %}{% endblock %}
+</body>
+</html>
