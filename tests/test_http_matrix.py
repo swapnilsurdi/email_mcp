@@ -223,6 +223,37 @@ def test_sync_ignores_groups_and_own_messages(hdb):
     assert fake.sent == []                    # 3-member room: stay silent
 
 
+def test_room_that_gains_a_member_stops_getting_sensitive_replies(hdb):
+    """Privacy is decided per send, not from an invite-time cache: once a third
+    member joins what used to be a DM, commands go unanswered there and
+    notifications move to a fresh private room."""
+    fake = FakeSynapse()
+    bot = registered_bot(hdb, fake)
+    room = "!dm9:chat.test"
+    fake.members[room] = ["@emailer:chat.test", "@bob:chat.test"]
+    fake.sync_responses = [
+        {"next_batch": "s1", "rooms": {"invite": {room: {"invite_state": {"events": [
+            {"type": "m.room.member", "state_key": "@emailer:chat.test",
+             "sender": "@bob:chat.test", "content": {"is_direct": True}}]}}}}},
+        {"next_batch": "s2", "rooms": {"join": {room: {"timeline": {"events": [
+            {"type": "m.room.message", "sender": "@bob:chat.test",
+             "content": {"msgtype": "m.text", "body": "login"}}]}}}}},
+    ]
+
+    async def run():
+        since = await bot.sync_once(None)             # invite accepted, room cached
+        fake.members[room].append("@eve:chat.test")   # ...then a third member joins
+        await bot.sync_once(since)
+    asyncio.run(run())
+    assert fake.sent == []                            # no sign-in link posted there
+
+    # notifications abandon the grown room and mint a fresh private one
+    asyncio.run(bot.notify_user("@bob:chat.test", "saved!"))
+    [(sent_room, body)] = fake.sent
+    assert sent_room != room and body == "saved!"
+    assert db.get_service_identity(hdb, "dm_room::@bob:chat.test") == sent_room
+
+
 def test_notify_user_creates_dm_and_never_raises(hdb):
     fake = FakeSynapse()
     bot = registered_bot(hdb, fake)

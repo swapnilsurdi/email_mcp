@@ -35,7 +35,6 @@ class MatrixBot:
         self.sync_timeout_ms = sync_timeout_ms
         self.user_id = None
         self.access_token = None
-        self._dm_peers = {}                  # room_id -> peer (confirmed DM rooms)
         self._txn = 0
         self._client = httpx.AsyncClient(base_url=self.homeserver,
                                          transport=transport,
@@ -122,25 +121,42 @@ class MatrixBot:
         r.raise_for_status()
         return r.json().get("event_id")
 
-    async def _dm_room_for(self, user_id):
-        dbp = self.db_path_fn()
-        key = f"dm_room::{user_id}"
-        room = db.get_service_identity(dbp, key)
-        if room:
-            return room
+    async def _members(self, room_id):
+        r = await self._client.get(f"{V3}/rooms/{room_id}/joined_members",
+                                   headers=self._auth())
+        r.raise_for_status()
+        return list((r.json().get("joined") or {}).keys())
+
+    async def _is_private_with(self, room_id, peer):
+        """The gate before posting anything sensitive (sign-in links, account state):
+        the room must hold at most the two of us RIGHT NOW. Checked per send, never
+        from a cache — members can be invited after a room was first seen as a DM,
+        and a third member must never be able to read a sign-in link."""
+        try:
+            members = await self._members(room_id)
+        except httpx.HTTPError:
+            return False
+        return (len(members) <= 2
+                and all(m in (self.user_id, peer) for m in members))
+
+    async def _create_dm(self, user_id):
         r = await self._client.post(f"{V3}/createRoom", headers=self._auth(), json={
             "is_direct": True, "invite": [user_id],
             "preset": "trusted_private_chat"})
         r.raise_for_status()
         room = r.json()["room_id"]
-        db.set_service_identity(dbp, key, room)
-        self._dm_peers[room] = user_id
+        db.set_service_identity(self.db_path_fn(), f"dm_room::{user_id}", room)
         return room
 
     async def notify_user(self, user_id, text):
-        """Best-effort DM (e.g. dashboard-save confirmations); never raises."""
+        """Best-effort DM (e.g. dashboard-save confirmations); never raises. The
+        remembered room is only a hint — if it is no longer private with the target
+        (someone else joined), a fresh DM room replaces it."""
         try:
-            await self._send(await self._dm_room_for(user_id), text)
+            room = db.get_service_identity(self.db_path_fn(), f"dm_room::{user_id}")
+            if not (room and await self._is_private_with(room, user_id)):
+                room = await self._create_dm(user_id)
+            await self._send(room, text)
         except Exception:
             pass
 
@@ -202,23 +218,8 @@ class MatrixBot:
         except httpx.HTTPError:
             return
         if direct and inviter:
-            self._dm_peers[room_id] = inviter
+            # a room-id hint for notify_user — privacy is re-verified at every send
             db.set_service_identity(self.db_path_fn(), f"dm_room::{inviter}", room_id)
-
-    async def _is_dm(self, room_id):
-        if room_id in self._dm_peers:
-            return True
-        try:
-            r = await self._client.get(f"{V3}/rooms/{room_id}/joined_members",
-                                       headers=self._auth())
-            members = list((r.json().get("joined") or {}).keys())
-        except httpx.HTTPError:
-            return False
-        if len(members) <= 2:
-            peer = next((m for m in members if m != self.user_id), None)
-            self._dm_peers[room_id] = peer
-            return True
-        return False
 
     async def _handle_event(self, room_id, ev):
         if ev.get("type") != "m.room.message":
@@ -227,7 +228,7 @@ class MatrixBot:
         if not sender or sender == self.user_id:
             return
         body = ((ev.get("content") or {}).get("body") or "").strip()
-        if not body or not await self._is_dm(room_id):
+        if not body or not await self._is_private_with(room_id, sender):
             return
         await self._send(room_id, self.handle_command(sender, body))
 
