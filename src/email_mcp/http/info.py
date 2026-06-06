@@ -22,6 +22,7 @@ def service_info(base_url, bot=None, approval_ttl=180):
             "gated by scoped agent keys, with a web dashboard and Matrix-driven "
             "onboarding."),
         "matrix_bot": bot,
+        "docs": f"{base_url}/help",
         "mcp": {
             "endpoint": f"{base_url}/mcp",
             "transport": "streamable-http",
@@ -57,6 +58,8 @@ def service_info(base_url, bot=None, approval_ttl=180):
         ],
         "api": {
             "GET /info": {"auth": "none", "returns": "this document"},
+            "GET /help": {"auth": "none",
+                          "returns": "the full service guide (markdown)"},
             "GET /health": {"auth": "none", "returns": "liveness + config sanity"},
             "POST /api/setup": {
                 "auth": "Bearer <login token>",

@@ -1,5 +1,8 @@
 # The HTTP service — multi-tenant email for an agent fleet
 
+Fetch this guide any time: `GET <base-url>/help` (markdown) · machine-readable
+summary: `GET <base-url>/info` · in the repo/package: `email_mcp/http/HELP.md`.
+
 The second surface of email-mcp (the first is the stdio MCP server, which is unchanged
 and shares no state with this one): a long-lived FastAPI app that many agents use over
 HTTPS, each through its own scoped key, with humans onboarding via a Matrix bot and a

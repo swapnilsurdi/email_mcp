@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -178,6 +178,14 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
         except Exception:
             ok = False
         return info.health(ok)
+
+    @app.get("/help")
+    def get_help():
+        """The full service guide as markdown (ships inside the package — the same
+        file as src/email_mcp/http/HELP.md in the repo). /info is the JSON summary;
+        this is the long-form reference for humans and agents alike."""
+        text = (Path(__file__).parent / "HELP.md").read_text(encoding="utf-8")
+        return Response(text, media_type="text/markdown; charset=utf-8")
 
     # ---- REST: setup ------------------------------------------------------------------
 

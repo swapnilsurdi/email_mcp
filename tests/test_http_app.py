@@ -58,6 +58,16 @@ def test_info_shows_bot_handle_once_registered(client):
     assert "@emailer:chat.test" in body["setup_flow"][0]
 
 
+def test_help_serves_the_packaged_guide(client):
+    r = client.get("/help")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/markdown")
+    assert "multi-tenant email for an agent fleet" in r.text
+    assert "three tiers" in r.text.lower()
+    # /info points agents at it
+    assert client.get("/info").json()["docs"].endswith("/help")
+
+
 # ---- setup ----------------------------------------------------------------------------
 
 def test_setup_requires_login(client):

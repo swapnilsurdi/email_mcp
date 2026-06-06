@@ -10,7 +10,8 @@ Two surfaces share the same core:
 - **HTTP service** (`pip install "email-mcp[http]"`, `email-mcp-http`) — long-lived and
   multi-tenant: MCP over streamable-HTTP behind scoped per-agent keys, a web dashboard,
   Matrix-bot onboarding, and owner-approved sends (👍 OTP) for recipients outside the
-  allowlist. See [docs/http-service.md](docs/http-service.md).
+  allowlist. Guide: [src/email_mcp/http/HELP.md](src/email_mcp/http/HELP.md) — also
+  served live by the service at `GET /help` (JSON summary at `GET /info`).
 
 ## Status
 
