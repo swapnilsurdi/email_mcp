@@ -3,6 +3,15 @@
 Local MCP server for multi-account IMAP/SMTP email (iCloud + Gmail via app-specific
 passwords). Never marks mail read. Cross-folder search, idempotent sends, TLS verified.
 
+Two surfaces share the same core:
+
+- **stdio MCP server** (this README) — single user, runs per-client, config from an
+  accounts file + Keychain/env.
+- **HTTP service** (`pip install "email-mcp[http]"`, `email-mcp-http`) — long-lived and
+  multi-tenant: MCP over streamable-HTTP behind scoped per-agent keys, a web dashboard,
+  Matrix-bot onboarding, and owner-approved sends (👍 OTP) for recipients outside the
+  allowlist. See [docs/http-service.md](docs/http-service.md).
+
 ## Status
 
 - **Tested against iCloud only.** The design is provider-generic (Gmail config is

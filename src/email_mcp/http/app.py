@@ -166,7 +166,9 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
 
     @app.get("/info")
     def get_info():
-        return info.service_info(base)
+        return info.service_info(
+            base, bot=db.get_service_identity(db_path_fn(), "matrix_user"),
+            approval_ttl=approvals_mgr.ttl)
 
     @app.get("/health")
     def get_health():

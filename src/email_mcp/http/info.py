@@ -13,7 +13,7 @@ SCOPES = {
 }
 
 
-def service_info(base_url):
+def service_info(base_url, bot=None, approval_ttl=180):
     return {
         "service": "email-mcp",
         "version": VERSION,
@@ -21,6 +21,7 @@ def service_info(base_url):
             "Multi-tenant IMAP/SMTP email for agents: MCP over streamable-HTTP, "
             "gated by scoped agent keys, with a web dashboard and Matrix-driven "
             "onboarding."),
+        "matrix_bot": bot,
         "mcp": {
             "endpoint": f"{base_url}/mcp",
             "transport": "streamable-http",
@@ -35,14 +36,17 @@ def service_info(base_url):
         "send_policy": {
             "tiers": "blocked_recipients -> BLOCKED; allowed_recipients match (or no "
                      "allowlist) -> sent; anything else -> pending_approval",
-            "approval": "the mailbox owner gets a Matrix DM preview and 180s to "
-                        "react 👍 (anything else / timeout rejects); poll "
-                        "get_send_status or GET /api/approvals/{id} for the outcome",
+            "approval": f"the mailbox owner gets a Matrix DM preview and "
+                        f"{approval_ttl}s to react 👍 (anything else / timeout "
+                        "rejects); poll get_send_status or GET /api/approvals/{id} "
+                        "for the outcome",
         },
         "scopes": SCOPES,
         "setup_flow": [
-            "1. DM the service's Matrix bot and send `login` — it replies with a "
-            "24h login token and a dashboard link.",
+            f"1. DM the service's Matrix bot ({bot or 'see the landing page'}) "
+            "and send `login` — it replies with a 24h single-use dashboard link "
+            "whose token also works as a REST Bearer credential until the link "
+            "is opened.",
             "2. Open the dashboard link (or use the REST API with `Authorization: "
             "Bearer <login token>`) to connect a mailbox: email + IMAP/SMTP hosts + "
             "app-specific password (stored encrypted) + recipient policy.",

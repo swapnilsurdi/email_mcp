@@ -44,8 +44,18 @@ def test_info_and_health_public(client):
     body = r.json()
     assert body["mcp"]["endpoint"].endswith("/mcp")
     assert "read" in body["scopes"]
+    assert body["matrix_bot"] is None        # no bot registered in tests
+    assert "180s" in body["send_policy"]["approval"]
+    assert "get_send_status" in body["mcp"]["tools"]
     r = client.get("/health")
     assert r.status_code == 200 and r.json()["ok"] is True
+
+
+def test_info_shows_bot_handle_once_registered(client):
+    db.set_service_identity(client.db_path, "matrix_user", "@emailer:chat.test")
+    body = client.get("/info").json()
+    assert body["matrix_bot"] == "@emailer:chat.test"
+    assert "@emailer:chat.test" in body["setup_flow"][0]
 
 
 # ---- setup ----------------------------------------------------------------------------
