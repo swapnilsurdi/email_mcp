@@ -216,6 +216,42 @@ def test_referrer_policy_header_everywhere(client):
     assert client.get("/health").headers["Referrer-Policy"] == "no-referrer"
 
 
+# ---- Matrix-save notification --------------------------------------------------------------
+
+
+class StubBot:
+    """notify-only double; no `start` attr, so the lifespan starts no sync task."""
+
+    def __init__(self):
+        self.notes = []
+
+    async def notify_user(self, user_id, text):
+        self.notes.append((user_id, text))
+
+
+def test_mailbox_save_notifies_owner_via_bot(tmp_path):
+    p = str(tmp_path / "state.db")
+    db.init_http_tables(p)
+    stub = StubBot()
+    application = http_app.create_app(db_path_fn=lambda: p,
+                                      master_key_fn=lambda: MK,
+                                      base_url="https://email-mcp.test", bot=stub)
+    with TestClient(application) as c:
+        c.db_path = p
+        t = login(c)
+        c.post("/api/setup", json=MB, headers=auth_hdr(t))
+        c.get("/health")          # lets the fire-and-forget notify task run
+        assert stub.notes and stub.notes[0][0] == "@admin:chat"
+        assert "bob@icloud.com" in stub.notes[0][1]
+        assert "connected" in stub.notes[0][1]
+
+        c.post("/api/setup", json={"mailbox": {"email": "bob@icloud.com",
+                                               "imap_host": "imap2.x"}},
+               headers=auth_hdr(t))
+        c.get("/health")
+        assert len(stub.notes) == 2 and "updated" in stub.notes[1][1]
+
+
 # ---- MCP over HTTP ------------------------------------------------------------------------
 
 MCP_HEADERS = {"Accept": "application/json, text/event-stream",

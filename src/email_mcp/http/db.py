@@ -297,6 +297,19 @@ def delete_session(db_path, raw):
         conn.execute("DELETE FROM sessions WHERE token_hash=?", (hash_token(raw),))
 
 
+def delete_sessions_for_user(db_path, user_id):
+    """The bot's `logout`: end every dashboard session the user has anywhere."""
+    with store.connect(db_path) as conn:
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+
+
+def consume_login_tokens_for_user(db_path, user_id):
+    """The bot's `logout`: void any sign-in links the user hasn't redeemed yet."""
+    with store.connect(db_path) as conn:
+        conn.execute("UPDATE login_tokens SET consumed=1 WHERE user_id=? AND consumed=0",
+                     (user_id,))
+
+
 # ---- agent auth tokens ------------------------------------------------------------
 
 def _norm_scopes(scopes):

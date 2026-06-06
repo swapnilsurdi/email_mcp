@@ -8,6 +8,7 @@ Run: `email-mcp-http` (console script) or `python -m email_mcp.http.app`.
 Env: EMAIL_MCP_DB, EMAIL_MCP_MASTER_KEY, EMAIL_MCP_HTTP_HOST/PORT,
 EMAIL_MCP_BASE_URL (public URL used in links, default https://email-mcp.surdi.in).
 """
+import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
@@ -19,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from email_mcp import runtime
-from email_mcp.http import auth, crypto, db, info, tools
+from email_mcp.http import auth, crypto, db, info, status, tools
 
 SESSION_COOKIE = "emcp_session"
 GRANTABLE_BY_MINT = {"read", "write", "send"}   # a mint key can never grant mint/admin
@@ -102,21 +103,38 @@ class _McpPathShim:
 # ---- app factory -----------------------------------------------------------------------
 
 def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
-               mount_mcp=True):
+               mount_mcp=True, bot=None):
     db_path_fn = db_path_fn or runtime.db_path
     master_key_fn = master_key_fn or _master_key
     base = base_url or _base_url()
 
     mcp = tools.build_mcp(db_path_fn, master_key_fn) if mount_mcp else None
 
+    # the Matrix bot: explicit (tests) or from env (the container sets
+    # EMAIL_MCP_MATRIX_URL=http://matrix-synapse:8008); absent -> no bot, no tasks
+    if bot is None and os.environ.get("EMAIL_MCP_MATRIX_URL"):
+        from email_mcp.http import matrix
+        bot = matrix.MatrixBot(db_path_fn, os.environ["EMAIL_MCP_MATRIX_URL"], base)
+
     @asynccontextmanager
     async def lifespan(app):
         db.init_http_tables(db_path_fn())
-        if mcp is not None:
-            async with mcp.session_manager.run():
+        tasks = []
+        if bot is not None and hasattr(bot, "start"):
+            tasks.append(asyncio.create_task(bot.start()))
+        hub = os.environ.get("EMAIL_MCP_STATUS_URL")
+        if hub:
+            tasks.append(asyncio.create_task(status.report_loop(
+                db_path_fn, base, hub, os.environ.get("EMAIL_MCP_STATUS_TOKEN"))))
+        try:
+            if mcp is not None:
+                async with mcp.session_manager.run():
+                    yield
+            else:
                 yield
-        else:
-            yield
+        finally:
+            for t in tasks:
+                t.cancel()
 
     app = FastAPI(title="email-mcp", lifespan=lifespan, docs_url=None, redoc_url=None)
 
@@ -158,6 +176,16 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
                                      "(DM the Matrix bot and send `login`)")
         return user
 
+    def _notify(user, text):
+        """Fire-and-forget DM to the owner via the bot, if one is running."""
+        if bot is None:
+            return
+        try:
+            asyncio.get_running_loop().create_task(
+                bot.notify_user(user["matrix_user"], text))
+        except RuntimeError:
+            pass
+
     @app.post("/api/setup")
     async def api_setup(request: Request):
         user = _require_login(request)
@@ -186,6 +214,8 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
                                         master_key=master_key_fn())
             if "policy" in body:
                 db.set_mailbox_policy(db_path_fn(), mid, policy)
+            _notify(user, f"Your mailbox {email} was just updated on the email-mcp "
+                          "dashboard. Not you? Send `logout` here right away.")
             return {"mailbox_id": mid, "email": email, "updated": True}
         try:
             mid = db.create_mailbox(
@@ -199,6 +229,8 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
                                      "one active mailbox per email across the system")
         except crypto.MasterKeyMissing as e:
             raise HTTPException(500, str(e))
+        _notify(user, f"Your mailbox {email} was just connected on the email-mcp "
+                      "dashboard. Not you? Send `logout` here right away.")
         return {"mailbox_id": mid, "email": email, "created": True}
 
     @app.get("/api/mailboxes")
