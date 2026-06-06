@@ -11,6 +11,11 @@ Semantics:
   recipient is first expanded to its bare address(es) via the same parser SMTP uses
   (email.utils.getaddresses), so a single element bundling extra addresses behind a
   comma or display name is validated address-by-address against the allowlist.
+- `blocked_recipients`: case-insensitive full-match regexes that always deny, taking
+  precedence over the allowlist. With three-tier classification (the HTTP service):
+  blocked → deny, allowlisted (or no allowlist) → send, anything else → owner
+  approval. Surfaces without an approval channel (stdio) treat non-allowed as denied,
+  exactly as before — `classify_recipient` only adds a middle tier where one exists.
 - Trash is ALWAYS protected (unless `protect_trash: false`): the reserved folder names
   of the major providers — Trash, Bin ([Gmail]/Bin), Deleted Messages (iCloud),
   Deleted Items (Outlook) — are matched as path segments, subfolders included. Since
@@ -63,21 +68,39 @@ def expand_recipients(recipients):
 
 class SecurityPolicy:
     def __init__(self, allowed_recipients=None, protected_folders=None,
-                 readable_folders=None, blocked_folders=None, protect_trash=True):
+                 readable_folders=None, blocked_folders=None, protect_trash=True,
+                 blocked_recipients=None):
         self.allowed_recipients = _compile(allowed_recipients)
+        self.blocked_recipients = _compile(blocked_recipients) or []
         self.protected_folders = _compile(protected_folders) or []
         self.readable_folders = _compile(readable_folders)
         self.blocked_folders = _compile(blocked_folders) or []
         self.protect_trash = protect_trash
 
     # ---- sends ------------------------------------------------------------------
+    def classify_recipient(self, addr):
+        """Three-tier verdict for one bare address: 'block' (blocked_recipients —
+        always wins), 'allow' (no allowlist, or it matches), or 'approve' (an
+        allowlist exists and it doesn't match — needs the owner's OK where an
+        approval channel exists, denied where none does)."""
+        a = (addr or "").strip()
+        if _fullmatch_any(self.blocked_recipients, a):
+            return "block"
+        if self.allowed_recipients is None \
+                or _fullmatch_any(self.allowed_recipients, a):
+            return "allow"
+        return "approve"
+
+    def classify_recipients(self, recipients):
+        """{bare address: verdict} over the SMTP-expanded recipient set."""
+        return {r: self.classify_recipient(r) for r in expand_recipients(recipients)}
+
     def denied_recipients(self, recipients):
-        """The subset of `recipients` the policy does NOT allow. Empty list = all ok.
-        Note: allowed_recipients == [] (explicitly empty) denies everyone."""
-        if self.allowed_recipients is None:
-            return []
-        return [r for r in expand_recipients(recipients)
-                if not _fullmatch_any(self.allowed_recipients, r.strip())]
+        """The subset of `recipients` the policy does NOT allow outright — the
+        no-approval-channel (stdio) semantics: anything not 'allow' is denied.
+        Empty list = all ok. allowed_recipients == [] still denies everyone."""
+        return [r for r, c in self.classify_recipients(recipients).items()
+                if c != "allow"]
 
     # ---- folders ----------------------------------------------------------------
     def folder_protected(self, folder):
@@ -105,6 +128,7 @@ def policy_from_mapping(sec):
     sec = sec or {}
     return SecurityPolicy(
         allowed_recipients=sec.get("allowed_recipients"),
+        blocked_recipients=sec.get("blocked_recipients"),
         protected_folders=sec.get("protected_folders"),
         readable_folders=sec.get("readable_folders"),
         blocked_folders=sec.get("blocked_folders"),

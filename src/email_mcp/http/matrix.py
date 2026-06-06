@@ -35,6 +35,7 @@ class MatrixBot:
         self.sync_timeout_ms = sync_timeout_ms
         self.user_id = None
         self.access_token = None
+        self.approvals = None                # ApprovalManager, wired by the app
         self._txn = 0
         self._client = httpx.AsyncClient(base_url=self.homeserver,
                                          transport=transport,
@@ -148,17 +149,29 @@ class MatrixBot:
         db.set_service_identity(self.db_path_fn(), f"dm_room::{user_id}", room)
         return room
 
+    async def _dm_send(self, user_id, text):
+        """DM `text` to `user_id`, re-verifying room privacy; returns the event id.
+        The remembered room is only a hint — if it is no longer private with the
+        target (someone else joined), a fresh DM room replaces it."""
+        room = db.get_service_identity(self.db_path_fn(), f"dm_room::{user_id}")
+        if not (room and await self._is_private_with(room, user_id)):
+            room = await self._create_dm(user_id)
+        return await self._send(room, text)
+
     async def notify_user(self, user_id, text):
-        """Best-effort DM (e.g. dashboard-save confirmations); never raises. The
-        remembered room is only a hint — if it is no longer private with the target
-        (someone else joined), a fresh DM room replaces it."""
+        """Best-effort DM (e.g. dashboard-save confirmations); never raises."""
         try:
-            room = db.get_service_identity(self.db_path_fn(), f"dm_room::{user_id}")
-            if not (room and await self._is_private_with(room, user_id)):
-                room = await self._create_dm(user_id)
-            await self._send(room, text)
+            await self._dm_send(user_id, text)
         except Exception:
             pass
+
+    async def send_approval_preview(self, user_id, text):
+        """DM a send-approval preview; returns the event id reactions will point at
+        (None if undeliverable — the approval then simply expires)."""
+        try:
+            return await self._dm_send(user_id, text)
+        except Exception:
+            return None
 
     # ---- sync loop ------------------------------------------------------------------
 
@@ -202,6 +215,8 @@ class MatrixBot:
         for room_id, joined in (rooms.get("join") or {}).items():
             for ev in ((joined.get("timeline") or {}).get("events") or []):
                 await self._handle_event(room_id, ev)
+        if self.approvals is not None:
+            await self.approvals.expire_overdue()
         return data.get("next_batch") or since
 
     async def _accept_invite(self, room_id, invite):
@@ -222,10 +237,15 @@ class MatrixBot:
             db.set_service_identity(self.db_path_fn(), f"dm_room::{inviter}", room_id)
 
     async def _handle_event(self, room_id, ev):
-        if ev.get("type") != "m.room.message":
-            return
         sender = ev.get("sender")
         if not sender or sender == self.user_id:
+            return
+        if ev.get("type") == "m.reaction":
+            if self.approvals is not None:
+                # sender authorization happens inside (must be the mailbox owner)
+                await self.approvals.on_reaction(ev)
+            return
+        if ev.get("type") != "m.room.message":
             return
         body = ((ev.get("content") or {}).get("body") or "").strip()
         if not body or not await self._is_private_with(room_id, sender):

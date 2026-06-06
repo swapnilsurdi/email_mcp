@@ -416,6 +416,22 @@ def get_approval(db_path, approval_id):
         return _row_to_dict(cur, cur.fetchone())
 
 
+def get_approval_by_event(db_path, event_id):
+    """The approval whose Matrix preview message a reaction points at."""
+    with store.connect(db_path) as conn:
+        cur = conn.execute("SELECT * FROM approvals WHERE matrix_event_id=?",
+                           (event_id,))
+        return _row_to_dict(cur, cur.fetchone())
+
+
+def update_approval_payload(db_path, approval_id, payload):
+    """Persist the send outcome alongside the original request (payload_json holds
+    {'request': ..., 'result': ...})."""
+    with store.connect(db_path) as conn:
+        conn.execute("UPDATE approvals SET payload_json=? WHERE id=?",
+                     (json.dumps(payload or {}), approval_id))
+
+
 def list_pending_approvals(db_path):
     with store.connect(db_path) as conn:
         cur = conn.execute("SELECT * FROM approvals WHERE status='pending' ORDER BY id")

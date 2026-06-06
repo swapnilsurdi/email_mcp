@@ -25,6 +25,34 @@ def test_empty_allowlist_blocks_all():
     assert p.denied_recipients(["me@icloud.com"]) == ["me@icloud.com"]
 
 
+# ---- three-tier classification (blocklist / allowlist / approve) -------------------
+
+def test_classify_three_tiers():
+    p = security.SecurityPolicy(allowed_recipients=["ok@x\\.com"],
+                                blocked_recipients=["bad@x\\.com"])
+    assert p.classify_recipient("ok@x.com") == "allow"
+    assert p.classify_recipient("bad@x.com") == "block"
+    assert p.classify_recipient("new@y.com") == "approve"
+    assert p.classify_recipients(["ok@x.com", "bad@x.com", "new@y.com"]) == {
+        "ok@x.com": "allow", "bad@x.com": "block", "new@y.com": "approve"}
+
+
+def test_blocklist_wins_over_allowlist_and_no_allowlist():
+    p = security.SecurityPolicy(allowed_recipients=["bad@x\\.com"],
+                                blocked_recipients=["bad@x\\.com"])
+    assert p.classify_recipient("bad@x.com") == "block"
+    # the blocklist applies even when there is no allowlist at all
+    p2 = security.SecurityPolicy(blocked_recipients=["bad@x\\.com"])
+    assert p2.classify_recipient("bad@x.com") == "block"
+    assert p2.classify_recipient("anyone@y.com") == "allow"
+    assert p2.denied_recipients(["bad@x.com", "anyone@y.com"]) == ["bad@x.com"]
+
+
+def test_no_allowlist_no_blocklist_classifies_allow():
+    p = security.SecurityPolicy()
+    assert p.classify_recipient("anyone@anywhere.com") == "allow"
+
+
 def test_multi_address_element_is_expanded_before_matching():
     # One list element bundling a second address behind a comma must be split and
     # validated address-by-address — not matched as one opaque string. With a broad

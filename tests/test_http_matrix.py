@@ -254,6 +254,34 @@ def test_room_that_gains_a_member_stops_getting_sensitive_replies(hdb):
     assert db.get_service_identity(hdb, "dm_room::@bob:chat.test") == sent_room
 
 
+def test_sync_routes_reactions_to_the_approval_manager(hdb):
+    fake = FakeSynapse()
+    bot = registered_bot(hdb, fake)
+    seen = []
+
+    class StubMgr:
+        async def on_reaction(self, ev):
+            seen.append(ev)
+
+        async def expire_overdue(self):
+            pass
+
+    bot.approvals = StubMgr()
+    fake.sync_responses = [
+        {"next_batch": "s1", "rooms": {"join": {"!r:chat.test": {"timeline":
+            {"events": [
+                {"type": "m.reaction", "sender": "@bob:chat.test",
+                 "content": {"m.relates_to": {"rel_type": "m.annotation",
+                                              "event_id": "$p1", "key": "👍"}}},
+                {"type": "m.reaction", "sender": "@emailer:chat.test",  # our own
+                 "content": {"m.relates_to": {"event_id": "$p1", "key": "👍"}}},
+            ]}}}}},
+    ]
+    asyncio.run(bot.sync_once(None))
+    assert len(seen) == 1                    # own reactions never dispatched
+    assert seen[0]["sender"] == "@bob:chat.test"
+
+
 def test_notify_user_creates_dm_and_never_raises(hdb):
     fake = FakeSynapse()
     bot = registered_bot(hdb, fake)

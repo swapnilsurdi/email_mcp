@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from email_mcp import runtime
-from email_mcp.http import auth, crypto, db, info, status, tools
+from email_mcp.http import approvals, auth, crypto, db, info, status, tools
 
 SESSION_COOKIE = "emcp_session"
 GRANTABLE_BY_MINT = {"read", "write", "send"}   # a mint key can never grant mint/admin
@@ -103,12 +103,10 @@ class _McpPathShim:
 # ---- app factory -----------------------------------------------------------------------
 
 def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
-               mount_mcp=True, bot=None):
+               mount_mcp=True, bot=None, approvals_mgr=None):
     db_path_fn = db_path_fn or runtime.db_path
     master_key_fn = master_key_fn or _master_key
     base = base_url or _base_url()
-
-    mcp = tools.build_mcp(db_path_fn, master_key_fn) if mount_mcp else None
 
     # the Matrix bot: explicit (tests) or from env (the container sets
     # EMAIL_MCP_MATRIX_URL=http://matrix-synapse:8008); absent -> no bot, no tasks
@@ -116,9 +114,21 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
         from email_mcp.http import matrix
         bot = matrix.MatrixBot(db_path_fn, os.environ["EMAIL_MCP_MATRIX_URL"], base)
 
+    # OTP send-approval: the manager exists either way (REST queries old approvals);
+    # without a bot it reports unavailable and the approve tier degrades to a deny
+    if approvals_mgr is None:
+        approvals_mgr = approvals.ApprovalManager(db_path_fn, master_key_fn)
+    approvals_mgr.bot = bot
+    if bot is not None:
+        bot.approvals = approvals_mgr
+
+    mcp = (tools.build_mcp(db_path_fn, master_key_fn, approvals=approvals_mgr)
+           if mount_mcp else None)
+
     @asynccontextmanager
     async def lifespan(app):
         db.init_http_tables(db_path_fn())
+        approvals_mgr.bind_loop(asyncio.get_running_loop())
         tasks = []
         if bot is not None and hasattr(bot, "start"):
             tasks.append(asyncio.create_task(bot.start()))
@@ -339,6 +349,27 @@ def create_app(db_path_fn=None, master_key_fn=None, base_url=None,
             raise HTTPException(404, "no such key")
         db.revoke_auth_token(db_path, tid)
         return {"token_id": tid, "revoked": True}
+
+    # ---- REST: send approvals -----------------------------------------------------------
+
+    @app.get("/api/approvals/{aid}")
+    def api_approval(aid: int, request: Request):
+        """Outcome of a pending_approval send: the owner (login token) or any agent
+        key bound to the same mailbox may look."""
+        db_path = db_path_fn()
+        row = approvals_mgr.status(aid)
+        user = _login_user(request, db_path)
+        if user is not None:
+            mids = _user_mailbox_ids(db_path, user["id"])
+        else:
+            principal = auth.resolve_principal(
+                db_path, request.headers.get("authorization", ""))
+            if principal is None or not principal["active"]:
+                raise HTTPException(401, "login token or an agent key required")
+            mids = [principal["mailbox_id"]]
+        if row is None or row["mailbox_id"] not in mids:
+            raise HTTPException(404, "no such approval")
+        return approvals.approval_view(row)
 
     # ---- dashboard ------------------------------------------------------------------------
 

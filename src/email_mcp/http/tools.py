@@ -151,7 +151,7 @@ def tool_move_email(db_path, master_key, message_id, dest_folder, folders=None,
 
 def tool_send_email(db_path, master_key, to, subject, body, tags=None,
                     attachments=None, allow_duplicate=False, idempotency_key=None,
-                    now=None, send_fn=None):
+                    now=None, send_fn=None, approvals=None):
     p, err = auth.check_scope("send")
     if err:
         return err
@@ -159,6 +159,33 @@ def tool_send_email(db_path, master_key, to, subject, body, tags=None,
     if err:
         return err
     now = now or time.time()
+    # three-tier recipient policy: block wins, then the unknowns go to the owner for
+    # approval (when a Matrix channel exists), and an all-allow send goes straight out
+    classes = policy.classify_recipients(to)
+    blocked = [r for r, c in classes.items() if c == "block"]
+    if blocked:
+        db.bump_usage(db_path, p["token_id"], "blocked", now)
+        return {"status": "BLOCKED", "reason": "recipient_blocked",
+                "denied_recipients": blocked,
+                "detail": "these recipients are on the mailbox's blocklist."}
+    pending = [r for r, c in classes.items() if c == "approve"]
+    if pending:
+        if approvals is None or not approvals.available():
+            db.bump_usage(db_path, p["token_id"], "blocked", now)
+            return {"status": "BLOCKED", "reason": "recipient_not_allowed",
+                    "denied_recipients": pending,
+                    "detail": "security.allowed_recipients does not match these "
+                              "recipients and no approval channel is available."}
+        aid = approvals.request(p, to=to, subject=subject, body=body, tags=tags,
+                                attachments=attachments,
+                                allow_duplicate=allow_duplicate,
+                                idempotency_key=idempotency_key,
+                                pending=pending, now=now)
+        return {"status": "pending_approval", "approval_id": aid,
+                "pending_recipients": pending,
+                "detail": f"the mailbox owner was asked on Matrix to approve this "
+                          f"send (👍 within {approvals.ttl}s); poll get_send_status "
+                          f"with the approval_id for the outcome."}
     kwargs = {"send_fn": send_fn} if send_fn else {}
     result = email_ops.send_email(
         db_path, acc, to=to, subject=subject, body=body, tags=tags,
@@ -172,6 +199,23 @@ def tool_send_email(db_path, master_key, to, subject, body, tags=None,
     return result
 
 
+def tool_get_send_status(db_path, master_key, approval_id, approvals=None):
+    """The outcome of a pending_approval send — visible only to keys of the same
+    mailbox, with either the read or the send scope."""
+    p, err = auth.check_scope("send")
+    if err:
+        p, err = auth.check_scope("read")
+        if err:
+            return err
+    row = (approvals.status(approval_id) if approvals is not None
+           else db.get_approval(db_path, approval_id))
+    if row is None or row["mailbox_id"] != p["mailbox_id"]:
+        return {"error": "not_found",
+                "detail": "no such approval for this agent key's mailbox"}
+    from email_mcp.http import approvals as approvals_mod
+    return approvals_mod.approval_view(row)
+
+
 # ---- FastMCP wiring -----------------------------------------------------------------
 
 INSTRUCTIONS = (
@@ -181,9 +225,10 @@ INSTRUCTIONS = (
 )
 
 
-def build_mcp(db_path_fn, master_key_fn):
+def build_mcp(db_path_fn, master_key_fn, approvals=None):
     """A FastMCP exposing the tool set; mount its streamable_http_app behind
-    MCPAuthMiddleware. Stateless: every JSON-RPC call is one authenticated POST."""
+    MCPAuthMiddleware. Stateless: every JSON-RPC call is one authenticated POST.
+    `approvals` (an ApprovalManager) enables the owner-approval tier for sends."""
     from mcp.server.fastmcp import FastMCP
     from mcp.server.transport_security import TransportSecuritySettings
 
@@ -258,12 +303,20 @@ def build_mcp(db_path_fn, master_key_fn):
                    attachments: list = None, allow_duplicate: bool = False,
                    idempotency_key: str = None) -> dict:
         """Send an email (requires the `send` scope). Idempotent: a duplicate send to
-        the same recipients within 10 minutes is BLOCKED. Recipients must satisfy the
-        mailbox's security policy or the send is BLOCKED with reason
-        recipient_not_allowed."""
+        the same recipients within 10 minutes is BLOCKED. Recipient policy is
+        three-tier: blocklisted -> BLOCKED; allowlisted (or no allowlist) -> sent;
+        anything else -> {status: pending_approval, approval_id} while the mailbox
+        owner is asked on Matrix — poll get_send_status for the outcome."""
         return tool_send_email(db_path_fn(), master_key_fn(), to=to, subject=subject,
                                body=body, tags=tags, attachments=attachments,
                                allow_duplicate=allow_duplicate,
-                               idempotency_key=idempotency_key)
+                               idempotency_key=idempotency_key, approvals=approvals)
+
+    @mcp.tool()
+    def get_send_status(approval_id: int) -> dict:
+        """The outcome of a send that returned pending_approval: status is pending,
+        approved, rejected, or expired, with the send result once approved."""
+        return tool_get_send_status(db_path_fn(), master_key_fn(), approval_id,
+                                    approvals=approvals)
 
     return mcp

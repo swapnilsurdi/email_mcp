@@ -29,7 +29,15 @@ def service_info(base_url):
                 f"claude mcp add email --transport http {base_url}/mcp "
                 f"--header \"Authorization: Bearer <agent key>\""),
             "tools": ["list_accounts", "list_folders", "get_emails",
-                      "download_attachment", "mark_email", "move_email", "send_email"],
+                      "download_attachment", "mark_email", "move_email", "send_email",
+                      "get_send_status"],
+        },
+        "send_policy": {
+            "tiers": "blocked_recipients -> BLOCKED; allowed_recipients match (or no "
+                     "allowlist) -> sent; anything else -> pending_approval",
+            "approval": "the mailbox owner gets a Matrix DM preview and 180s to "
+                        "react 👍 (anything else / timeout rejects); poll "
+                        "get_send_status or GET /api/approvals/{id} for the outcome",
         },
         "scopes": SCOPES,
         "setup_flow": [
@@ -86,6 +94,10 @@ def service_info(base_url):
                 "auth": "Bearer <login token>",
                 "effect": "logout: erases the stored password; agents get "
                           "mailbox_unavailable until reconnected"},
+            "GET /api/approvals/{id}": {
+                "auth": "Bearer <login token> | agent key of the same mailbox",
+                "returns": "{approval_id, status: pending|approved|rejected|expired, "
+                           "recipients, subject, result}"},
         },
         "dashboard": f"{base_url}/?token=<login token>",
     }
